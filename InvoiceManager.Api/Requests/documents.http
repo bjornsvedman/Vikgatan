@@ -1,4 +1,4 @@
-@baseUrl = http://localhost:5080
+@baseUrl = http://localhost:5084
 
 ### Get an antiforgery token (the response cookie is reused by the REST Client)
 GET {{baseUrl}}/api/antiforgery/token
@@ -19,3 +19,33 @@ Content-Type: application/pdf
 
 ### Get the uploaded receipt by ID
 GET {{baseUrl}}/api/documents/{{receiptId}}
+
+### List receipts awaiting review
+GET {{baseUrl}}/api/documents/review-queue
+
+### Review and complete a receipt
+PUT {{baseUrl}}/api/documents/{{receiptId}}/review
+X-CSRF-TOKEN: {{csrfToken}}
+Content-Type: application/json
+
+{
+	"vendor": "Tile House",
+	"documentDate": "2024-05-12",
+	"currency": "SEK",
+	"totalAmount": 125.50,
+	"category": "Flooring",
+	"description": "Kitchen floor tiles",
+	"markReviewed": true,
+	"lineItems": [
+		{
+			"description": "Ceramic tile",
+			"quantity": 10,
+			"unitPrice": 12.55,
+			"lineTotal": 125.50,
+			"category": "Flooring"
+		}
+	]
+}
+
+### Preview the original uploaded document
+GET {{baseUrl}}/api/documents/{{receiptId}}/file

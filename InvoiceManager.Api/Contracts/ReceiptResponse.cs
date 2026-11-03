@@ -10,5 +10,18 @@ public sealed record ReceiptResponse(
     string? Vendor,
     string? Currency,
     decimal? TotalAmount,
+    string? Category,
+    string? Description,
     ReceiptProcessingStatus Status,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc,
+    IReadOnlyList<ReceiptLineItemResponse> LineItems);
+
+/// <summary>Represents an item extracted from a receipt or invoice.</summary>
+public sealed record ReceiptLineItemResponse(
+    Guid Id,
+    string Description,
+    decimal? Quantity,
+    decimal? UnitPrice,
+    decimal? LineTotal,
+    string? Category);

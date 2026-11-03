@@ -29,6 +29,27 @@ public static class ReceiptEndpoints
             .Produces<ReceiptResponse>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
+        documents.MapGet("/{id:guid}/file", GetFileAsync)
+            .WithName("GetReceiptFile")
+            .WithSummary("View the original receipt file")
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
+        documents.MapGet("/review-queue", GetReviewQueueAsync)
+            .WithName("GetReceiptReviewQueue")
+            .WithSummary("List receipts awaiting review")
+            .WithDescription("Returns pending and partially reviewed receipts, oldest first.")
+            .Produces<IReadOnlyList<ReceiptResponse>>(StatusCodes.Status200OK);
+
+        documents.MapPut("/{id:guid}/review", ReviewAsync)
+            .WithName("ReviewReceipt")
+            .WithSummary("Save receipt metadata and review status")
+            .WithDescription("Saves corrected metadata and line items, optionally marking the receipt as completed.")
+            .Accepts<UpdateReceiptReviewRequest>("application/json")
+            .Produces<ReceiptResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status400BadRequest);
+
         return app;
     }
 
@@ -77,5 +98,41 @@ public static class ReceiptEndpoints
     {
         var receipt = await ingestionService.GetByIdAsync(id, cancellationToken);
         return receipt is null ? TypedResults.NotFound() : TypedResults.Ok(receipt);
+    }
+
+    private static async Task<Results<PhysicalFileHttpResult, NotFound>> GetFileAsync(
+        Guid id,
+        IReceiptIngestionService ingestionService,
+        CancellationToken cancellationToken)
+    {
+        var file = await ingestionService.GetFileAsync(id, cancellationToken);
+        return file is null
+            ? TypedResults.NotFound()
+            : TypedResults.PhysicalFile(file.FullPath, file.ContentType, enableRangeProcessing: true);
+    }
+
+    private static async Task<Ok<IReadOnlyList<ReceiptResponse>>> GetReviewQueueAsync(
+        IReceiptReviewService reviewService,
+        CancellationToken cancellationToken) =>
+        TypedResults.Ok(await reviewService.GetReviewQueueAsync(cancellationToken));
+
+    private static async Task<Results<Ok<ReceiptResponse>, NotFound, ProblemHttpResult>> ReviewAsync(
+        Guid id,
+        UpdateReceiptReviewRequest request,
+        IReceiptReviewService reviewService,
+        CancellationToken cancellationToken)
+    {
+        var result = await reviewService.ReviewAsync(id, request, cancellationToken);
+
+        return result.Status switch
+        {
+            ReceiptReviewStatus.Updated => TypedResults.Ok(result.Receipt!),
+            ReceiptReviewStatus.NotFound => TypedResults.NotFound(),
+            ReceiptReviewStatus.Invalid => TypedResults.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Review data is invalid.",
+                detail: string.Join(" ", result.ValidationErrors)),
+            _ => TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError)
+        };
     }
 }

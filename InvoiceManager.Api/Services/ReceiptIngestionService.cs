@@ -62,6 +62,7 @@ public sealed class ReceiptIngestionService(
 
         var existingReceipt = await dbContext.Receipts
             .AsNoTracking()
+            .Include(receipt => receipt.LineItems)
             .SingleOrDefaultAsync(receipt => receipt.ContentHash == contentHash, cancellationToken);
 
         if (existingReceipt is not null)
@@ -102,7 +103,7 @@ public sealed class ReceiptIngestionService(
             dbContext.Receipts.Add(receipt);
             await dbContext.SaveChangesAsync(cancellationToken);
 
-            return new(ReceiptIngestionStatus.Created, ToResponse(receipt));
+            return new(ReceiptIngestionStatus.Created, ReceiptResponseMapper.ToResponse(receipt));
         }
         catch (DbUpdateException exception) when (IsContentHashConflict(exception))
         {
@@ -111,6 +112,7 @@ public sealed class ReceiptIngestionService(
 
             var concurrentDuplicate = await dbContext.Receipts
                 .AsNoTracking()
+                .Include(item => item.LineItems)
                 .SingleOrDefaultAsync(item => item.ContentHash == contentHash, cancellationToken);
 
             if (concurrentDuplicate is null)
@@ -131,9 +133,49 @@ public sealed class ReceiptIngestionService(
     {
         var receipt = await dbContext.Receipts
             .AsNoTracking()
+            .Include(item => item.LineItems)
             .SingleOrDefaultAsync(item => item.Id == id, cancellationToken);
 
-        return receipt is null ? null : ToResponse(receipt);
+        return receipt is null ? null : ReceiptResponseMapper.ToResponse(receipt);
+    }
+
+    public async Task<StoredReceiptFile?> GetFileAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var storedFileName = await dbContext.Receipts
+            .AsNoTracking()
+            .Where(receipt => receipt.Id == id)
+            .Select(receipt => receipt.FilePath)
+            .SingleOrDefaultAsync(cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(storedFileName)
+            || !string.Equals(Path.GetFileName(storedFileName), storedFileName, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var fullPath = Path.GetFullPath(Path.Combine(_storageRoot, storedFileName));
+        var storagePrefix = _storageRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? _storageRoot
+            : _storageRoot + Path.DirectorySeparatorChar;
+        var pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (!fullPath.StartsWith(storagePrefix, pathComparison) || !File.Exists(fullPath))
+        {
+            return null;
+        }
+
+        var contentType = Path.GetExtension(storedFileName).ToLowerInvariant() switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".webp" => "image/webp",
+            _ => "application/octet-stream"
+        };
+
+        return new StoredReceiptFile(fullPath, contentType);
     }
 
     private static async Task<bool> HasValidSignatureAsync(
@@ -199,17 +241,7 @@ public sealed class ReceiptIngestionService(
         };
 
     private static ReceiptIngestionResult Duplicate(Receipt receipt) =>
-        new(ReceiptIngestionStatus.Duplicate, ToResponse(receipt));
-
-    private static ReceiptResponse ToResponse(Receipt receipt) => new(
-        receipt.Id,
-        receipt.FileName,
-        receipt.DocumentDate,
-        receipt.Vendor,
-        receipt.Currency,
-        receipt.TotalAmount,
-        receipt.ProcessingStatus,
-        receipt.CreatedAtUtc);
+        new(ReceiptIngestionStatus.Duplicate, ReceiptResponseMapper.ToResponse(receipt));
 
     private void TryDeleteStoredFile(string path)
     {

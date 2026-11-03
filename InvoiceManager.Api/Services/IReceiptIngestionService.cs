@@ -8,4 +8,6 @@ public interface IReceiptIngestionService
     Task<ReceiptIngestionResult> IngestAsync(IFormFile file, CancellationToken cancellationToken);
 
     Task<ReceiptResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
+
+    Task<StoredReceiptFile?> GetFileAsync(Guid id, CancellationToken cancellationToken);
 }

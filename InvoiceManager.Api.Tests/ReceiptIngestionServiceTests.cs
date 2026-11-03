@@ -1,4 +1,5 @@
 using System.Text;
+using InvoiceManager.Api.Contracts;
 using InvoiceManager.Api.Data;
 using InvoiceManager.Api.Documents;
 using InvoiceManager.Api.Services;
@@ -23,6 +24,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
     private InvoiceDbContext _dbContext = null!;
     private IDbContextTransaction _transaction = null!;
     private ReceiptIngestionService _service = null!;
+    private ReceiptReviewService _reviewService = null!;
 
     public async Task InitializeAsync()
     {
@@ -37,6 +39,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
             Options.Create(new DocumentStorageOptions { RootPath = _storageRoot }),
             new TestWebHostEnvironment { ContentRootPath = _storageRoot },
             NullLogger<ReceiptIngestionService>.Instance);
+        _reviewService = new ReceiptReviewService(_dbContext);
     }
 
     public async Task DisposeAsync()
@@ -68,6 +71,34 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
             Assert.Equal(64, storedReceipt.ContentHash.Length);
             Assert.True(File.Exists(Path.Combine(_storageRoot, storedReceipt.FilePath)));
         }
+    }
+
+    [Fact]
+    public async Task GetFileAsync_StoredReceipt_ReturnsFileWithinStorageRoot()
+    {
+        var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\nreceipt");
+        using (stream)
+        {
+            var ingested = await _service.IngestAsync(file, CancellationToken.None);
+            var storedFile = await _service.GetFileAsync(ingested.Receipt!.Id, CancellationToken.None);
+
+            Assert.NotNull(storedFile);
+            Assert.Equal("application/pdf", storedFile.ContentType);
+            Assert.StartsWith(_storageRoot, storedFile.FullPath, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task GetFileAsync_PathOutsideStorageRoot_ReturnsNull()
+    {
+        var receipt = CreateReceipt(ReceiptProcessingStatus.Pending, DateTimeOffset.UtcNow);
+        receipt.FilePath = "..\\outside.pdf";
+        _dbContext.Receipts.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+
+        var storedFile = await _service.GetFileAsync(receipt.Id, CancellationToken.None);
+
+        Assert.Null(storedFile);
     }
 
     [Fact]
@@ -144,6 +175,104 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         Assert.False(Directory.Exists(_storageRoot));
     }
 
+    [Fact]
+    public async Task GetReviewQueueAsync_ReturnsPendingAndNeedsReviewOldestFirst()
+    {
+        var oldest = CreateReceipt(ReceiptProcessingStatus.Pending, DateTimeOffset.UtcNow.AddMinutes(-2));
+        var newest = CreateReceipt(ReceiptProcessingStatus.NeedsReview, DateTimeOffset.UtcNow.AddMinutes(-1));
+        var completed = CreateReceipt(ReceiptProcessingStatus.Completed, DateTimeOffset.UtcNow);
+        _dbContext.Receipts.AddRange(oldest, newest, completed);
+        await _dbContext.SaveChangesAsync();
+
+        var queue = await _reviewService.GetReviewQueueAsync(CancellationToken.None);
+
+        Assert.Equal([oldest.Id, newest.Id], queue.Select(receipt => receipt.Id));
+    }
+
+    [Fact]
+    public async Task ReviewAsync_CompleteReview_SavesMetadataAndLineItems()
+    {
+        var receipt = CreateReceipt(ReceiptProcessingStatus.Pending, DateTimeOffset.UtcNow.AddMinutes(-1));
+        _dbContext.Receipts.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+
+        var result = await _reviewService.ReviewAsync(
+            receipt.Id,
+            new UpdateReceiptReviewRequest
+            {
+                Vendor = "  Tile House ",
+                DocumentDate = new DateOnly(2024, 5, 12),
+                Currency = "sek",
+                TotalAmount = 125.50m,
+                Category = "Flooring",
+                Description = "Kitchen floor tiles",
+                MarkReviewed = true,
+                LineItems =
+                [
+                    new UpdateReceiptLineItemRequest
+                    {
+                        Description = "Ceramic tile",
+                        Quantity = 10,
+                        UnitPrice = 12.55m,
+                        LineTotal = 125.50m,
+                        Category = "Flooring"
+                    }
+                ]
+            },
+            CancellationToken.None);
+
+        Assert.Equal(ReceiptReviewStatus.Updated, result.Status);
+        Assert.NotNull(result.Receipt);
+        Assert.Equal(ReceiptProcessingStatus.Completed, result.Receipt.Status);
+        Assert.Equal("Tile House", result.Receipt.Vendor);
+        Assert.Equal("SEK", result.Receipt.Currency);
+        Assert.Equal("Ceramic tile", Assert.Single(result.Receipt.LineItems).Description);
+
+        var savedReceipt = await _dbContext.Receipts
+            .Include(item => item.LineItems)
+            .SingleAsync(item => item.Id == receipt.Id);
+        Assert.Equal(125.50m, savedReceipt.TotalAmount);
+        Assert.Single(savedReceipt.LineItems);
+    }
+
+    [Fact]
+    public async Task ReviewAsync_IncompleteCompletion_ReturnsValidationErrorsWithoutChangingReceipt()
+    {
+        var receipt = CreateReceipt(ReceiptProcessingStatus.Pending, DateTimeOffset.UtcNow);
+        _dbContext.Receipts.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+
+        var result = await _reviewService.ReviewAsync(
+            receipt.Id,
+            new UpdateReceiptReviewRequest { MarkReviewed = true },
+            CancellationToken.None);
+
+        Assert.Equal(ReceiptReviewStatus.Invalid, result.Status);
+        Assert.NotEmpty(result.ValidationErrors);
+        Assert.Equal(ReceiptProcessingStatus.Pending, (await _dbContext.Receipts.SingleAsync()).ProcessingStatus);
+    }
+
+    [Fact]
+    public async Task ReviewAsync_UnknownReceipt_ReturnsNotFound()
+    {
+        var result = await _reviewService.ReviewAsync(
+            Guid.NewGuid(),
+            new UpdateReceiptReviewRequest(),
+            CancellationToken.None);
+
+        Assert.Equal(ReceiptReviewStatus.NotFound, result.Status);
+    }
+
+    private static Receipt CreateReceipt(ReceiptProcessingStatus status, DateTimeOffset createdAt) => new()
+    {
+        FileName = "receipt.pdf",
+        FilePath = $"{Guid.NewGuid():N}.pdf",
+        ContentHash = $"{Guid.NewGuid():N}{Guid.NewGuid():N}",
+        ProcessingStatus = status,
+        CreatedAtUtc = createdAt,
+        UpdatedAtUtc = createdAt
+    };
+
     private static (FormFile File, MemoryStream Stream) CreateFile(string fileName, string contents)
     {
         var stream = new MemoryStream(Encoding.ASCII.GetBytes(contents));
@@ -171,7 +300,7 @@ public sealed class PostgresFixture : IAsyncLifetime
     public PostgreSqlContainer Container { get; } = new PostgreSqlBuilder("pgvector/pgvector:pg17")
         .WithDatabase("invoice_manager_tests")
         .WithUsername("invoice_manager")
-        .WithPassword("test-only-password")
+        .WithPassword(Guid.NewGuid().ToString("N"))
         .Build();
 
     public async Task InitializeAsync()

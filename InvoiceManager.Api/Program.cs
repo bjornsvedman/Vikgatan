@@ -32,6 +32,7 @@ if (string.IsNullOrWhiteSpace(connectionString))
 builder.Services.AddDbContext<InvoiceDbContext>(options =>
 	options.UseNpgsql(connectionString, postgres => postgres.UseVector()));
 builder.Services.AddScoped<IReceiptIngestionService, ReceiptIngestionService>();
+builder.Services.AddScoped<IReceiptReviewService, ReceiptReviewService>();
 
 var app = builder.Build();
 
