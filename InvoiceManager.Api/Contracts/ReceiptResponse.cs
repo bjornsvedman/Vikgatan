@@ -13,6 +13,7 @@ public sealed record ReceiptResponse(
     string? Category,
     string? Description,
     ReceiptProcessingStatus Status,
+    string? ProcessingError,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
     IReadOnlyList<ReceiptLineItemResponse> LineItems);

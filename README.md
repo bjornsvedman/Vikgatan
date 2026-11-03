@@ -49,6 +49,18 @@ dotnet user-secrets set "Foundry:Embeddings:Deployment" "<embedding deployment n
 
 The local identity needs inference access to the Azure AI resource (typically the **Cognitive Services OpenAI User** role). The configured vector size is 1536, matching the tested `text-embedding-3-small` output. If the deployment or dimension changes, update the schema and re-embed existing documents before using it. Never commit API keys, access tokens, or real receipts.
 
+## Microsoft Foundry receipt extraction
+
+Extraction is disabled by default. After confirming the deployment is approved for the documents you intend to process, enable it locally and set the vision deployment in User Secrets:
+
+```powershell
+dotnet user-secrets set "Foundry:Extraction:Enabled" "true" --project InvoiceManager.Api
+dotnet user-secrets set "Foundry:Extraction:Endpoint" "https://<resource>.services.ai.azure.com" --project InvoiceManager.Api
+dotnet user-secrets set "Foundry:Extraction:Deployment" "<vision deployment name>" --project InvoiceManager.Api
+```
+
+New uploads are then sent to the configured Responses API deployment. Successful extraction fills draft metadata, stores the raw structured result, generates a 1536-dimensional embedding from the extracted summary, and queues the receipt as `NeedsReview`. Failed extraction leaves the original file available for manual entry. Use only synthetic documents for unapproved environments.
+
 ## Frontend
 
 ```powershell

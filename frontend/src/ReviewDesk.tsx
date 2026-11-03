@@ -22,6 +22,7 @@ type Receipt = {
   category: string | null
   description: string | null
   status: ReceiptStatus
+  processingError: string | null
   createdAtUtc: string
   updatedAtUtc: string
   lineItems: ReceiptLineItem[]
@@ -375,6 +376,12 @@ function ReviewDesk() {
                     />
                   )}
                 </div>
+
+                {selectedReceipt.processingError && (
+                  <div className="message message-error document-processing-error" role="status">
+                    {selectedReceipt.processingError}
+                  </div>
+                )}
 
                 <div className="form-section">
                   <div className="section-label">

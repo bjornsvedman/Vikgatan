@@ -25,8 +25,11 @@ builder.Services.Configure<DocumentStorageOptions>(
 	builder.Configuration.GetSection(DocumentStorageOptions.SectionName));
 builder.Services.Configure<FoundryEmbeddingOptions>(
 	builder.Configuration.GetSection(FoundryEmbeddingOptions.SectionName));
+builder.Services.Configure<FoundryExtractionOptions>(
+	builder.Configuration.GetSection(FoundryExtractionOptions.SectionName));
 builder.Services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
 builder.Services.AddHttpClient<IEmbeddingProvider, FoundryEmbeddingProvider>();
+builder.Services.AddHttpClient<IReceiptExtractionProvider, FoundryReceiptExtractionProvider>();
 
 var connectionString = builder.Configuration.GetConnectionString("Postgres");
 if (string.IsNullOrWhiteSpace(connectionString))

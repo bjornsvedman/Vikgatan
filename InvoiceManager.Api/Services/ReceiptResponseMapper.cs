@@ -15,6 +15,7 @@ internal static class ReceiptResponseMapper
         receipt.Category,
         receipt.Description,
         receipt.ProcessingStatus,
+        receipt.ProcessingError,
         receipt.CreatedAtUtc,
         receipt.UpdatedAtUtc,
         receipt.LineItems

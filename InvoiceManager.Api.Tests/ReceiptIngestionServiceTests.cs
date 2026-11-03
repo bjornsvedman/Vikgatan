@@ -25,6 +25,8 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
     private IDbContextTransaction _transaction = null!;
     private ReceiptIngestionService _service = null!;
     private ReceiptReviewService _reviewService = null!;
+    private StubReceiptExtractionProvider _extractionProvider = null!;
+    private StubEmbeddingProvider _embeddingProvider = null!;
 
     public async Task InitializeAsync()
     {
@@ -34,11 +36,9 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
 
         _dbContext = new InvoiceDbContext(options);
         _transaction = await _dbContext.Database.BeginTransactionAsync();
-        _service = new ReceiptIngestionService(
-            _dbContext,
-            Options.Create(new DocumentStorageOptions { RootPath = _storageRoot }),
-            new TestWebHostEnvironment { ContentRootPath = _storageRoot },
-            NullLogger<ReceiptIngestionService>.Instance);
+        _extractionProvider = new StubReceiptExtractionProvider();
+        _embeddingProvider = new StubEmbeddingProvider();
+        _service = CreateIngestionService(enabled: false, _extractionProvider, _embeddingProvider);
         _reviewService = new ReceiptReviewService(_dbContext);
     }
 
@@ -65,6 +65,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
             Assert.Equal(ReceiptIngestionStatus.Created, result.Status);
             Assert.NotNull(result.Receipt);
             Assert.Equal(ReceiptProcessingStatus.Pending, result.Receipt.Status);
+            Assert.Equal(0, _extractionProvider.Calls);
 
             var storedReceipt = await _dbContext.Receipts.SingleAsync();
             Assert.Equal(result.Receipt.Id, storedReceipt.Id);
@@ -176,6 +177,59 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task IngestAsync_ExtractionEnabled_SavesFieldsForHumanReview()
+    {
+        _extractionProvider.Result = new ReceiptExtractionResult(
+            new ExtractedReceipt(
+                "Tile House",
+                "2024-05-12",
+                "sek",
+                125.50m,
+                "Flooring",
+                "Kitchen tile purchase",
+                [new ExtractedReceiptLineItem("Ceramic tile", 10, 12.55m, 125.50m, "Flooring")]),
+            "{\"vendor\":\"Tile House\"}");
+        var service = CreateIngestionService(enabled: true, _extractionProvider, _embeddingProvider);
+        var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\nreceipt");
+        using (stream)
+        {
+            var result = await service.IngestAsync(file, CancellationToken.None);
+
+            Assert.Equal(ReceiptIngestionStatus.Created, result.Status);
+            Assert.Equal(ReceiptProcessingStatus.NeedsReview, result.Receipt!.Status);
+            Assert.Equal("Tile House", result.Receipt.Vendor);
+            Assert.Equal(new DateOnly(2024, 5, 12), result.Receipt.DocumentDate);
+            Assert.Equal("SEK", result.Receipt.Currency);
+            Assert.Equal(125.50m, result.Receipt.TotalAmount);
+            Assert.Equal("Ceramic tile", Assert.Single(result.Receipt.LineItems).Description);
+            Assert.Equal("{\"vendor\":\"Tile House\"}", (await _dbContext.Receipts.SingleAsync()).ExtractedMetadataJson);
+            var savedReceipt = await _dbContext.Receipts.SingleAsync();
+            Assert.NotNull(savedReceipt.Embedding);
+            Assert.Equal("stub-embedding-model", savedReceipt.EmbeddingModel);
+            Assert.Equal(1, _embeddingProvider.Calls);
+            Assert.Equal(1, _extractionProvider.Calls);
+        }
+    }
+
+    [Fact]
+    public async Task IngestAsync_ExtractionFails_KeepsFileAndMarksReceiptFailedForReview()
+    {
+        _extractionProvider.ExceptionToThrow = new HttpRequestException("synthetic provider failure");
+        var service = CreateIngestionService(enabled: true, _extractionProvider, _embeddingProvider);
+        var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\nreceipt");
+        using (stream)
+        {
+            var result = await service.IngestAsync(file, CancellationToken.None);
+
+            Assert.Equal(ReceiptIngestionStatus.Created, result.Status);
+            Assert.Equal(ReceiptProcessingStatus.Failed, result.Receipt!.Status);
+            Assert.Contains("Review the document", result.Receipt.ProcessingError);
+            Assert.True(File.Exists(Path.Combine(_storageRoot, result.Receipt.Id.ToString("N") + ".pdf")));
+            Assert.Equal(1, _extractionProvider.Calls);
+        }
+    }
+
+    [Fact]
     public async Task GetReviewQueueAsync_ReturnsPendingAndNeedsReviewOldestFirst()
     {
         var oldest = CreateReceipt(ReceiptProcessingStatus.Pending, DateTimeOffset.UtcNow.AddMinutes(-2));
@@ -273,6 +327,18 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         UpdatedAtUtc = createdAt
     };
 
+    private ReceiptIngestionService CreateIngestionService(
+        bool enabled,
+        IReceiptExtractionProvider extractionProvider,
+        IEmbeddingProvider embeddingProvider) => new(
+            _dbContext,
+            Options.Create(new DocumentStorageOptions { RootPath = _storageRoot }),
+            Options.Create(new FoundryExtractionOptions { Enabled = enabled }),
+            extractionProvider,
+            embeddingProvider,
+            new TestWebHostEnvironment { ContentRootPath = _storageRoot },
+            NullLogger<ReceiptIngestionService>.Instance);
+
     private static (FormFile File, MemoryStream Stream) CreateFile(string fileName, string contents)
     {
         var stream = new MemoryStream(Encoding.ASCII.GetBytes(contents));
@@ -318,5 +384,46 @@ public sealed class PostgresFixture : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await Container.DisposeAsync();
+    }
+}
+
+public sealed class StubEmbeddingProvider : IEmbeddingProvider
+{
+    public int Calls { get; private set; }
+
+    public string ModelName => "stub-embedding-model";
+
+    public int Dimensions => FoundryEmbeddingOptions.DefaultDimensions;
+
+    public Task<float[]> GenerateAsync(string input, CancellationToken cancellationToken)
+    {
+        Calls++;
+        return Task.FromResult(new float[Dimensions]);
+    }
+}
+
+public sealed class StubReceiptExtractionProvider : IReceiptExtractionProvider
+{
+    public int Calls { get; private set; }
+
+    public Exception? ExceptionToThrow { get; set; }
+
+    public ReceiptExtractionResult Result { get; set; } = new(
+        new ExtractedReceipt(null, null, null, null, null, null, []),
+        "{}");
+
+    public Task<ReceiptExtractionResult> ExtractAsync(
+        Stream fileStream,
+        string fileName,
+        string contentType,
+        CancellationToken cancellationToken)
+    {
+        Calls++;
+        if (ExceptionToThrow is not null)
+        {
+            throw ExceptionToThrow;
+        }
+
+        return Task.FromResult(Result);
     }
 }

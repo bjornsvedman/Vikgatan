@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Globalization;
+using System.Text.Json;
 using InvoiceManager.Api.Contracts;
 using InvoiceManager.Api.Data;
 using InvoiceManager.Api.Documents;
@@ -13,6 +15,9 @@ namespace InvoiceManager.Api.Services;
 public sealed class ReceiptIngestionService(
     InvoiceDbContext dbContext,
     IOptions<DocumentStorageOptions> storageOptions,
+    IOptions<FoundryExtractionOptions> extractionOptions,
+    IReceiptExtractionProvider extractionProvider,
+    IEmbeddingProvider embeddingProvider,
     IWebHostEnvironment environment,
     ILogger<ReceiptIngestionService> logger) : IReceiptIngestionService
 {
@@ -30,6 +35,7 @@ public sealed class ReceiptIngestionService(
     private readonly string _storageRoot = Path.GetFullPath(
         storageOptions.Value.RootPath,
         environment.ContentRootPath);
+    private readonly FoundryExtractionOptions _extractionOptions = extractionOptions.Value;
 
     public async Task<ReceiptIngestionResult> IngestAsync(
         IFormFile file,
@@ -102,8 +108,6 @@ public sealed class ReceiptIngestionService(
 
             dbContext.Receipts.Add(receipt);
             await dbContext.SaveChangesAsync(cancellationToken);
-
-            return new(ReceiptIngestionStatus.Created, ReceiptResponseMapper.ToResponse(receipt));
         }
         catch (DbUpdateException exception) when (IsContentHashConflict(exception))
         {
@@ -127,6 +131,13 @@ public sealed class ReceiptIngestionService(
             TryDeleteStoredFile(storedFilePath);
             throw;
         }
+
+        if (_extractionOptions.Enabled)
+        {
+            await ExtractMetadataAsync(receipt, storedFilePath, extension, cancellationToken);
+        }
+
+        return new(ReceiptIngestionStatus.Created, ReceiptResponseMapper.ToResponse(receipt));
     }
 
     public async Task<ReceiptResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
@@ -137,6 +148,164 @@ public sealed class ReceiptIngestionService(
             .SingleOrDefaultAsync(item => item.Id == id, cancellationToken);
 
         return receipt is null ? null : ReceiptResponseMapper.ToResponse(receipt);
+    }
+
+    private async Task ExtractMetadataAsync(
+        Receipt receipt,
+        string storedFilePath,
+        string extension,
+        CancellationToken cancellationToken)
+    {
+        receipt.ProcessingStatus = ReceiptProcessingStatus.Processing;
+        receipt.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await using var fileStream = new FileStream(
+                storedFilePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 81920,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+            var extraction = await extractionProvider.ExtractAsync(
+                fileStream,
+                receipt.FileName,
+                GetContentType(extension),
+                cancellationToken);
+
+            ApplyExtraction(receipt, extraction);
+            var embeddingInput = BuildEmbeddingInput(receipt);
+            if (!string.IsNullOrWhiteSpace(embeddingInput))
+            {
+                var embedding = await embeddingProvider.GenerateAsync(embeddingInput, cancellationToken);
+                if (embedding.Length != embeddingProvider.Dimensions
+                    || embedding.Length != FoundryEmbeddingOptions.DefaultDimensions)
+                {
+                    throw new InvalidOperationException(
+                        $"Embedding length {embedding.Length} does not match the configured provider and vector column dimensions.");
+                }
+
+                receipt.Embedding = new Pgvector.Vector(embedding);
+                receipt.EmbeddingModel = embeddingProvider.ModelName;
+            }
+
+            receipt.ProcessingStatus = ReceiptProcessingStatus.NeedsReview;
+            receipt.ProcessingError = null;
+        }
+        catch (OperationCanceledException)
+        {
+            receipt.ProcessingStatus = ReceiptProcessingStatus.Pending;
+            receipt.ProcessingError = null;
+            receipt.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Receipt extraction failed for receipt {ReceiptId}.", receipt.Id);
+            receipt.ProcessingStatus = ReceiptProcessingStatus.Failed;
+            receipt.ProcessingError = "Automatic extraction failed. Review the document and enter its details manually.";
+        }
+
+        receipt.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private void ApplyExtraction(Receipt receipt, ReceiptExtractionResult extraction)
+    {
+        var metadata = extraction.Metadata;
+        receipt.Vendor = ValidText(metadata.Vendor, 256);
+        receipt.DocumentDate = DateOnly.TryParseExact(
+            metadata.DocumentDate,
+            "yyyy-MM-dd",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out var documentDate)
+            ? documentDate
+            : null;
+        receipt.Currency = metadata.Currency is { Length: 3 } currency
+            && currency.All(character => character is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z'))
+            ? currency.ToUpperInvariant()
+            : null;
+        receipt.TotalAmount = IsValidAmount(metadata.TotalAmount) ? metadata.TotalAmount : null;
+        receipt.Category = ValidText(metadata.Category, 128);
+        receipt.Description = ValidText(metadata.Description, 4000);
+        receipt.ExtractedMetadataJson = extraction.RawJson;
+        receipt.LineItems.Clear();
+
+        foreach (var item in (metadata.LineItems ?? []).Take(100))
+        {
+            var description = ValidText(item.Description, 1000);
+            if (description is null)
+            {
+                continue;
+            }
+
+            dbContext.ReceiptLineItems.Add(new ReceiptLineItem
+            {
+                ReceiptId = receipt.Id,
+                Description = description,
+                Quantity = IsValidAmount(item.Quantity) ? item.Quantity : null,
+                UnitPrice = IsValidAmount(item.UnitPrice) ? item.UnitPrice : null,
+                LineTotal = IsValidAmount(item.LineTotal) ? item.LineTotal : null,
+                Category = ValidText(item.Category, 128)
+            });
+        }
+    }
+
+    private static string? ValidText(string? value, int maximumLength)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrEmpty(normalized) || normalized.Length > maximumLength
+            ? null
+            : normalized;
+    }
+
+    private static bool IsValidAmount(decimal? value) =>
+        value is >= 0 and <= 99999999999999.9999m
+        && decimal.Round(value.Value, 4) == value.Value;
+
+    private static string GetContentType(string extension) => extension switch
+    {
+        ".pdf" => "application/pdf",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".png" => "image/png",
+        ".webp" => "image/webp",
+        _ => "application/octet-stream"
+    };
+
+    private static string BuildEmbeddingInput(Receipt receipt)
+    {
+        var sections = new List<string>();
+        if (!string.IsNullOrWhiteSpace(receipt.Vendor))
+        {
+            sections.Add($"Vendor: {receipt.Vendor}");
+        }
+
+        if (receipt.DocumentDate is not null)
+        {
+            sections.Add($"Document date: {receipt.DocumentDate:yyyy-MM-dd}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(receipt.Category))
+        {
+            sections.Add($"Category: {receipt.Category}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(receipt.Description))
+        {
+            sections.Add(receipt.Description);
+        }
+
+        if (receipt.LineItems.Count > 0)
+        {
+            sections.Add("Items: " + string.Join("; ", receipt.LineItems.Select(item => item.Description)));
+        }
+
+        return string.Join("\n", sections);
     }
 
     public async Task<StoredReceiptFile?> GetFileAsync(Guid id, CancellationToken cancellationToken)

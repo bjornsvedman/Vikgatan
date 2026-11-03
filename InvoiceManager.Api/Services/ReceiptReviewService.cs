@@ -18,7 +18,8 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
             .AsNoTracking()
             .Include(receipt => receipt.LineItems)
             .Where(receipt => receipt.ProcessingStatus == ReceiptProcessingStatus.Pending
-                || receipt.ProcessingStatus == ReceiptProcessingStatus.NeedsReview)
+                || receipt.ProcessingStatus == ReceiptProcessingStatus.NeedsReview
+                || receipt.ProcessingStatus == ReceiptProcessingStatus.Failed)
             .OrderBy(receipt => receipt.CreatedAtUtc)
             .ToListAsync(cancellationToken);
 
