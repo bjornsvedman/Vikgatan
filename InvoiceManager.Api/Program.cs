@@ -1,3 +1,5 @@
+using Azure.Core;
+using Azure.Identity;
 using InvoiceManager.Api.Contracts;
 using InvoiceManager.Api.Data;
 using InvoiceManager.Api.Endpoints;
@@ -21,6 +23,10 @@ builder.Services.Configure<FormOptions>(options =>
 	options.MultipartBodyLengthLimit = DocumentStorageOptions.MaximumRequestBytes);
 builder.Services.Configure<DocumentStorageOptions>(
 	builder.Configuration.GetSection(DocumentStorageOptions.SectionName));
+builder.Services.Configure<FoundryEmbeddingOptions>(
+	builder.Configuration.GetSection(FoundryEmbeddingOptions.SectionName));
+builder.Services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
+builder.Services.AddHttpClient<IEmbeddingProvider, FoundryEmbeddingProvider>();
 
 var connectionString = builder.Configuration.GetConnectionString("Postgres");
 if (string.IsNullOrWhiteSpace(connectionString))

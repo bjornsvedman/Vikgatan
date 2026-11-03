@@ -5,6 +5,8 @@ namespace InvoiceManager.Api.Data;
 
 public sealed class InvoiceDbContext(DbContextOptions<InvoiceDbContext> options) : DbContext(options)
 {
+    private const int EmbeddingDimensions = 1536;
+
     public DbSet<Receipt> Receipts => Set<Receipt>();
 
     public DbSet<ReceiptLineItem> ReceiptLineItems => Set<ReceiptLineItem>();
@@ -33,7 +35,7 @@ public sealed class InvoiceDbContext(DbContextOptions<InvoiceDbContext> options)
         receipts.Property(receipt => receipt.ProcessingError).HasMaxLength(4000);
         receipts.Property(receipt => receipt.EmbeddingModel).HasMaxLength(256);
         receipts.Property(receipt => receipt.EmbeddingModelVersion).HasMaxLength(128);
-        receipts.Property(receipt => receipt.Embedding).HasColumnType("vector");
+        receipts.Property(receipt => receipt.Embedding).HasColumnType($"vector({EmbeddingDimensions})");
         receipts.Property(receipt => receipt.CreatedAtUtc).IsRequired();
         receipts.Property(receipt => receipt.UpdatedAtUtc).IsRequired();
 

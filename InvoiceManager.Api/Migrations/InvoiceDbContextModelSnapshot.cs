@@ -56,7 +56,7 @@ namespace InvoiceManager.Api.Migrations
                         .HasColumnType("date");
 
                     b.Property<Vector>("Embedding")
-                        .HasColumnType("vector");
+                        .HasColumnType("vector(1536)");
 
                     b.Property<string>("EmbeddingModel")
                         .HasMaxLength(256)
