@@ -1,0 +1,22 @@
+# .NET
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+frontend/.env*
+!frontend/.env.example
+
+# Local configuration and data
+.env
+.env.*
+!.env.example
+storage/
+
+# IDE
+.vscode/
+.idea/
