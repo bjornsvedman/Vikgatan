@@ -1,0 +1,21 @@
+@baseUrl = http://localhost:5080
+
+### Get an antiforgery token (the response cookie is reused by the REST Client)
+GET {{baseUrl}}/api/antiforgery/token
+> {% client.global.set("csrfToken", response.body.requestToken); %}
+
+### Upload a supported sample file; replace the path with a local PDF or image
+POST {{baseUrl}}/api/documents/ingest
+X-CSRF-TOKEN: {{csrfToken}}
+Content-Type: multipart/form-data; boundary=ReceiptBoundary
+
+--ReceiptBoundary
+Content-Disposition: form-data; name="file"; filename="receipt.pdf"
+Content-Type: application/pdf
+
+< ./sample-receipt.pdf
+--ReceiptBoundary--
+> {% client.global.set("receiptId", response.body.id); %}
+
+### Get the uploaded receipt by ID
+GET {{baseUrl}}/api/documents/{{receiptId}}

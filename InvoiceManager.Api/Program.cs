@@ -1,8 +1,26 @@
+using InvoiceManager.Api.Contracts;
 using InvoiceManager.Api.Data;
+using InvoiceManager.Api.Endpoints;
+using InvoiceManager.Api.Middleware;
+using InvoiceManager.Api.Services;
+using Microsoft.AspNetCore.Antiforgery;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Http.Features;
 using Pgvector.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddOpenApi();
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<BadHttpRequestExceptionHandler>();
+builder.Services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
+builder.Services.ConfigureHttpJsonOptions(options =>
+	options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.Configure<FormOptions>(options =>
+	options.MultipartBodyLengthLimit = DocumentStorageOptions.MaximumRequestBytes);
+builder.Services.Configure<DocumentStorageOptions>(
+	builder.Configuration.GetSection(DocumentStorageOptions.SectionName));
 
 var connectionString = builder.Configuration.GetConnectionString("Postgres");
 if (string.IsNullOrWhiteSpace(connectionString))
@@ -13,9 +31,30 @@ if (string.IsNullOrWhiteSpace(connectionString))
 
 builder.Services.AddDbContext<InvoiceDbContext>(options =>
 	options.UseNpgsql(connectionString, postgres => postgres.UseVector()));
+builder.Services.AddScoped<IReceiptIngestionService, ReceiptIngestionService>();
 
 var app = builder.Build();
 
+app.UseExceptionHandler();
+app.UseStatusCodePages();
+app.UseAntiforgery();
+
 app.MapGet("/", () => Results.Ok(new { name = "Invoice Manager API", status = "running" }));
+app.MapGet("/api/antiforgery/token", (HttpContext context, IAntiforgery antiforgery) =>
+{
+	context.Response.Headers.CacheControl = "no-store";
+	var token = antiforgery.GetAndStoreTokens(context).RequestToken!;
+	return TypedResults.Ok(new AntiforgeryTokenResponse(token));
+})
+	.WithName("GetAntiforgeryToken")
+	.WithSummary("Get a request token for browser form submissions")
+	.Produces<AntiforgeryTokenResponse>();
+
+if (app.Environment.IsDevelopment())
+{
+	app.MapOpenApi();
+}
+
+app.MapReceiptEndpoints();
 
 app.Run();
