@@ -11,6 +11,13 @@ public static class ReceiptEndpoints
     {
         var documents = app.MapGroup("/api/documents").WithTags("Documents");
 
+        documents.MapGet("/archive", BrowseAsync)
+            .WithName("BrowseReceiptArchive")
+            .WithSummary("Browse all receipts grouped by document year")
+            .WithDescription("Filters all processing states and paginates with newest years first, then the selected sort field. Amount sorting uses stored amounts without currency conversion.")
+            .Produces<ReceiptArchiveResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest);
+
         documents.MapPost("/ingest", IngestAsync)
             .WithName("IngestReceipt")
             .WithSummary("Upload and register a receipt or invoice")
@@ -59,6 +66,22 @@ public static class ReceiptEndpoints
             .ProducesProblem(StatusCodes.Status400BadRequest);
 
         return app;
+    }
+
+    private static async Task<Results<Ok<ReceiptArchiveResponse>, ProblemHttpResult>> BrowseAsync(
+        [AsParameters] ReceiptArchiveRequest request,
+        ReceiptArchiveService archiveService,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return TypedResults.Ok(await archiveService.BrowseAsync(request, cancellationToken));
+        }
+        catch (ArgumentException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid archive request.", detail: exception.Message);
+        }
     }
 
     private static async Task<Results<Created<ReceiptResponse>, Conflict<ReceiptResponse>, ProblemHttpResult>> IngestAsync(

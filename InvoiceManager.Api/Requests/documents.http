@@ -23,6 +23,18 @@ GET {{baseUrl}}/api/documents/{{receiptId}}
 ### List receipts awaiting review
 GET {{baseUrl}}/api/documents/review-queue
 
+### Browse all receipts, newest document year first
+GET {{baseUrl}}/api/documents/archive
+
+### Sort by category within each year and filter reviewed SEK receipts
+GET {{baseUrl}}/api/documents/archive?sortBy=category&direction=asc&status=Completed&currency=SEK&page=1&pageSize=25
+
+### Filter by year, category, and document date range
+GET {{baseUrl}}/api/documents/archive?year=2024&category=Flooring&dateFrom=2024-01-01&dateTo=2024-12-31
+
+### Find undated and uncategorized receipts
+GET {{baseUrl}}/api/documents/archive?undated=true&uncategorized=true
+
 ### Review and complete a receipt
 PUT {{baseUrl}}/api/documents/{{receiptId}}/review
 X-CSRF-TOKEN: {{csrfToken}}

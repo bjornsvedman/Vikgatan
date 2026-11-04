@@ -1,7 +1,8 @@
+import { BrowserRouter } from 'react-router-dom'
 import ReviewDesk from './ReviewDesk'
 
 function App() {
-  return <ReviewDesk />
+  return <BrowserRouter><ReviewDesk /></BrowserRouter>
 }
 
 export default App

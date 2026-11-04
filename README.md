@@ -61,9 +61,17 @@ dotnet user-secrets set "Foundry:Extraction:Deployment" "<vision deployment name
 
 New uploads are then sent to the configured Responses API deployment. Successful extraction fills draft metadata, stores the raw structured result, generates a 1536-dimensional embedding from the extracted summary, and queues the receipt as `NeedsReview`. Failed extraction leaves the original file available for manual entry. Use only synthetic documents for unapproved environments.
 
+## Browse the receipt archive
+
+The **Archive** page at `/archive` shows all stored receipts, including reviewed documents, grouped by document year (newest first) with undated receipts last. Sort within each year by category, document date, vendor, or stored amount in either direction. Amount sorting does not convert currencies; use the currency filter when comparing amounts.
+
+Combine year/date-range, category, vendor, currency, and review-status filters, then select **Apply**. Active filters can be removed individually or cleared together. Undated and uncategorized receipts have explicit filter choices. Pages contain up to 25 receipts. Select a receipt to view its read-only details, line items, and original file without losing filters or ordering. Client-side navigation preserves archive state when visiting other pages and returning. The **Review** page at `/review` retains the existing review workflow; editing already reviewed receipts from the archive remains future work.
+
+`GET /api/documents/archive` returns a page plus archive-wide filter choices. Supported query parameters are `year`, `undated`, `dateFrom`, `dateTo`, `category`, `uncategorized`, `vendor`, `currency`, `status`, `sortBy` (`date`, `category`, `vendor`, `amount`), `direction` (`asc`, `desc`), `page`, and `pageSize` (1-100, default 25). Category and vendor filters are case-insensitive exact matches. Browsing uses PostgreSQL only, without AI calls.
+
 ## Ask questions about receipts
 
-Use the **Ask your receipts** panel to query the stored archive. `POST /api/documents/query` classifies the request, then either embeds it to find similar receipts or calculates exact totals directly in PostgreSQL. Exact totals can be filtered or grouped by year, vendor, and category, and are kept separate by currency; only reviewed receipts are counted. Semantic answers use a bounded context that includes recent receipts without embeddings when the collection is small. Answers include citations that open the original document. The model does not calculate authoritative totals.
+The home page at `/` focuses on **Ask your receipts**, with natural-language questions and cited answers. Archive browsing and review are on their own pages. `POST /api/documents/query` classifies the request, then either embeds it to find similar receipts or calculates exact totals directly in PostgreSQL. Exact totals can be filtered or grouped by year, vendor, and category, and are kept separate by currency; only reviewed receipts are counted. Semantic answers use a bounded context that includes recent receipts without embeddings when the collection is small. Answers include citations that open the original document. The model does not calculate authoritative totals.
 
 ## Frontend
 
@@ -74,6 +82,8 @@ npm run dev
 ```
 
 ## Build checks
+
+Vite supports direct navigation and refreshes at `/archive` and `/review`. Any future static deployment must serve the SPA entry point for these frontend routes while keeping `/api` requests routed to the backend.
 
 ```powershell
 dotnet build InvoiceManager.sln

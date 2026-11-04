@@ -44,6 +44,7 @@ builder.Services.AddDbContext<InvoiceDbContext>(options =>
 	options.UseNpgsql(connectionString, postgres => postgres.UseVector()));
 builder.Services.AddScoped<IReceiptIngestionService, ReceiptIngestionService>();
 builder.Services.AddScoped<IReceiptReviewService, ReceiptReviewService>();
+builder.Services.AddScoped<ReceiptArchiveService>();
 builder.Services.AddScoped<IReceiptQuestionService, ReceiptQuestionService>();
 
 var app = builder.Build();

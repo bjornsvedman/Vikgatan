@@ -1,7 +1,10 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
+import { Archive, ClipboardCheck, MessageSquare, Search } from 'lucide-react'
+import { Link, NavLink, useLocation } from 'react-router-dom'
+import ReceiptArchive from './ReceiptArchive'
 import './ReviewDesk.css'
 
-type ReceiptStatus = 'Pending' | 'Processing' | 'NeedsReview' | 'Completed' | 'Failed'
+export type ReceiptStatus = 'Pending' | 'Processing' | 'NeedsReview' | 'Completed' | 'Failed'
 
 type ReceiptLineItem = {
   id: string
@@ -12,7 +15,7 @@ type ReceiptLineItem = {
   category: string | null
 }
 
-type Receipt = {
+export type Receipt = {
   id: string
   fileName: string
   documentDate: string | null
@@ -96,6 +99,10 @@ async function responseError(response: Response): Promise<Error> {
 }
 
 function ReviewDesk() {
+  const { pathname } = useLocation()
+  const view = pathname === '/' ? 'home' : pathname === '/archive' ? 'archive' : pathname === '/review' ? 'review' : 'not-found'
+  const pageTitle = view === 'home' ? 'Ask your receipts' : view === 'archive' ? 'Receipt archive' : view === 'review' ? 'Review receipts' : 'Page not found'
+  const [archiveVersion, setArchiveVersion] = useState(0)
   const [receipts, setReceipts] = useState<Receipt[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<ReviewDraft | null>(null)
@@ -108,6 +115,11 @@ function ReviewDesk() {
   const [question, setQuestion] = useState('')
   const [questionResponse, setQuestionResponse] = useState<ReceiptQuestionResponse | null>(null)
   const [asking, setAsking] = useState(false)
+
+  useEffect(() => {
+    document.title = `${pageTitle} | Renovation archive`
+    window.scrollTo(0, 0)
+  }, [pageTitle])
 
   useEffect(() => {
     let active = true
@@ -149,6 +161,7 @@ function ReviewDesk() {
     if (!response.ok) throw await responseError(response)
     const queue = (await response.json()) as Receipt[]
     setReceipts(queue)
+    setArchiveVersion((version) => version + 1)
 
     const next = queue.find((receipt) => receipt.id === focusId)
       ?? queue.find((receipt) => receipt.id === selectedId)
@@ -310,10 +323,10 @@ function ReviewDesk() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="wordmark" href="/" aria-label="Receipt desk home">
+        <Link className="wordmark" to="/" aria-label="Receipt desk home">
           <span className="wordmark-mark">R</span>
           <span>Renovation archive</span>
-        </a>
+        </Link>
         <div className="topbar-meta">
           <span className="local-indicator"><span />Local workspace</span>
           <label className={`upload-button${uploading ? ' is-busy' : ''}`}>
@@ -328,41 +341,44 @@ function ReviewDesk() {
         </div>
       </header>
 
+      <nav className="page-nav" aria-label="Main navigation">
+        <NavLink to="/" end><MessageSquare size={16} aria-hidden="true" />Ask receipts</NavLink>
+        <NavLink to="/archive"><Archive size={16} aria-hidden="true" />Archive</NavLink>
+        <NavLink to="/review"><ClipboardCheck size={16} aria-hidden="true" />Review<span className="nav-count">{receipts.length}</span></NavLink>
+      </nav>
+
       <main className="page-content">
         <section className="page-heading">
           <div>
-            <p className="eyebrow">DOCUMENT REVIEW</p>
-            <h1>Receipt desk</h1>
+            <p className="eyebrow">{view === 'home' ? 'RENOVATION ARCHIVE' : 'DOCUMENTS'}</p>
+            <h1 id="page-title">{pageTitle}</h1>
           </div>
-          <div className="queue-summary" aria-label={`${receipts.length} receipts awaiting review`}>
+          {view === 'review' && <div className="queue-summary" aria-label={`${receipts.length} receipts awaiting review`}>
             <strong>{receipts.length.toString().padStart(2, '0')}</strong>
             <span>in queue</span>
             <i />
             <strong>{pendingCount.toString().padStart(2, '0')}</strong>
             <span>new</span>
-          </div>
+          </div>}
         </section>
 
         {error && <div className="message message-error" role="alert">{error}</div>}
         {notice && <div className="message message-success" role="status">{notice}</div>}
 
-        <section className="question-panel" aria-label="Ask questions about receipts">
-          <div className="question-heading">
-            <p className="eyebrow">ARCHIVE SEARCH</p>
-            <h2>Ask your receipts</h2>
-          </div>
+        <section className="question-panel question-home" aria-label="Ask questions about receipts" hidden={view !== 'home'}>
           <form className="question-form" onSubmit={(event) => void askReceipts(event)}>
             <label className="question-field">
               <span className="sr-only">Question</span>
               <textarea
                 maxLength={2000}
                 onChange={(event) => setQuestion(event.target.value)}
-                placeholder="Ask about a vendor, purchase, or renovation…"
-                rows={2}
+                placeholder="How much did I spend on flooring in 2024?"
+                rows={3}
                 value={question}
               />
             </label>
             <button className="button-primary question-button" disabled={asking || !requestToken || !question.trim()} type="submit">
+              <Search size={17} aria-hidden="true" />
               {asking ? 'Searching…' : 'Ask'}
             </button>
           </form>
@@ -393,6 +409,11 @@ function ReviewDesk() {
           )}
         </section>
 
+        <ReceiptArchive active={view === 'archive'} refreshVersion={archiveVersion} />
+
+        {view === 'not-found' && <Link className="text-button" to="/">Back to questions</Link>}
+
+        <div id="review-panel" aria-labelledby="page-title" hidden={view !== 'review'}>
         <section className="workbench" aria-label="Receipt review workspace">
           <aside className="queue-pane">
             <div className="pane-heading">
@@ -556,6 +577,7 @@ function ReviewDesk() {
             )}
           </section>
         </section>
+        </div>
       </main>
     </div>
   )
