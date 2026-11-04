@@ -1,6 +1,6 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
-import { Archive, ClipboardCheck, MessageSquare, Search } from 'lucide-react'
-import { Link, NavLink, useLocation } from 'react-router-dom'
+import { Archive, ClipboardCheck, MessageSquare, Save, Search, X } from 'lucide-react'
+import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom'
 import ReceiptArchive from './ReceiptArchive'
 import './ReviewDesk.css'
 
@@ -100,12 +100,18 @@ async function responseError(response: Response): Promise<Error> {
 
 function ReviewDesk() {
   const { pathname } = useLocation()
-  const view = pathname === '/' ? 'home' : pathname === '/archive' ? 'archive' : pathname === '/review' ? 'review' : 'not-found'
-  const pageTitle = view === 'home' ? 'Ask your receipts' : view === 'archive' ? 'Receipt archive' : view === 'review' ? 'Review receipts' : 'Page not found'
+  const navigate = useNavigate()
+  const editId = useMatch('/archive/:receiptId/edit')?.params.receiptId
+  const view = editId ? 'edit' : pathname === '/' ? 'home' : pathname === '/archive' ? 'archive' : pathname === '/review' ? 'review' : 'not-found'
+  const pageTitle = view === 'home' ? 'Ask your receipts' : view === 'archive' ? 'Receipt archive' : view === 'review' ? 'Review receipts' : view === 'edit' ? 'Edit reviewed receipt' : 'Page not found'
   const [archiveVersion, setArchiveVersion] = useState(0)
+  const [lastSavedReceipt, setLastSavedReceipt] = useState<Receipt | null>(null)
   const [receipts, setReceipts] = useState<Receipt[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [draft, setDraft] = useState<ReviewDraft | null>(null)
+  const [reviewDraft, setReviewDraft] = useState<ReviewDraft | null>(null)
+  const [editDraft, setEditDraft] = useState<ReviewDraft | null>(null)
+  const [editReceipt, setEditReceipt] = useState<Receipt | null>(null)
+  const [editLoading, setEditLoading] = useState(false)
   const [requestToken, setRequestToken] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -115,6 +121,8 @@ function ReviewDesk() {
   const [question, setQuestion] = useState('')
   const [questionResponse, setQuestionResponse] = useState<ReceiptQuestionResponse | null>(null)
   const [asking, setAsking] = useState(false)
+  const draft = editId ? editDraft : reviewDraft
+  const setDraft = editId ? setEditDraft : setReviewDraft
 
   useEffect(() => {
     document.title = `${pageTitle} | Renovation archive`
@@ -139,7 +147,7 @@ function ReviewDesk() {
         setReceipts(queue)
         if (queue.length > 0) {
           setSelectedId(queue[0].id)
-          setDraft(toDraft(queue[0]))
+          setReviewDraft(toDraft(queue[0]))
         }
       } catch (requestError) {
         if (active) setError(requestError instanceof Error ? requestError.message : 'Could not load receipts.')
@@ -154,7 +162,37 @@ function ReviewDesk() {
     }
   }, [])
 
-  const selectedReceipt = receipts.find((receipt) => receipt.id === selectedId) ?? null
+  useEffect(() => {
+    if (!editId) return
+    const controller = new AbortController()
+    async function loadReceipt() {
+      setEditLoading(true)
+      setEditReceipt(null)
+      setEditDraft(null)
+      setError('')
+      setNotice('')
+      try {
+        const response = await fetch(`/api/documents/${encodeURIComponent(editId!)}`, { signal: controller.signal })
+        if (!response.ok) throw await responseError(response)
+        const receipt = await response.json() as Receipt
+        if (receipt.status !== 'Completed') throw new Error('This receipt is not approved. Use the review queue to review it.')
+        if (!controller.signal.aborted) {
+          setEditReceipt(receipt)
+          setEditDraft(toDraft(receipt))
+        }
+      } catch (requestError) {
+        if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : 'Could not load receipt.')
+      } finally {
+        if (!controller.signal.aborted) setEditLoading(false)
+      }
+    }
+    void loadReceipt()
+    return () => controller.abort()
+  }, [editId])
+
+  const selectedReceipt = editId
+    ? editReceipt?.id === editId ? editReceipt : null
+    : receipts.find((receipt) => receipt.id === selectedId) ?? null
 
   async function refreshQueue(focusId?: string) {
     const response = await fetch('/api/documents/review-queue')
@@ -168,16 +206,16 @@ function ReviewDesk() {
       ?? queue[0]
     if (next) {
       setSelectedId(next.id)
-      setDraft(toDraft(next))
+      setReviewDraft(toDraft(next))
     } else {
       setSelectedId(null)
-      setDraft(null)
+      setReviewDraft(null)
     }
   }
 
   function selectReceipt(receipt: Receipt) {
     setSelectedId(receipt.id)
-    setDraft(toDraft(receipt))
+    setReviewDraft(toDraft(receipt))
     setError('')
     setNotice('')
   }
@@ -250,13 +288,13 @@ function ReviewDesk() {
   }
 
   async function saveReview(markReviewed: boolean) {
-    if (!selectedId || !draft) return
+    if (!selectedReceipt || !draft || !requestToken) return
 
     setSaving(true)
     setError('')
     setNotice('')
     try {
-      const response = await fetch(`/api/documents/${selectedId}/review`, {
+      const response = await fetch(`/api/documents/${selectedReceipt.id}/review`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -269,7 +307,7 @@ function ReviewDesk() {
           totalAmount: draft.totalAmount === '' ? null : Number(draft.totalAmount),
           category: draft.category,
           description: draft.description,
-          markReviewed,
+          markReviewed: !!editId || markReviewed,
           lineItems: draft.lineItems.map((item) => ({
             description: item.description,
             quantity: item.quantity === '' ? null : Number(item.quantity),
@@ -282,8 +320,16 @@ function ReviewDesk() {
 
       if (!response.ok) throw await responseError(response)
       const updated = (await response.json()) as Receipt
-      setNotice(markReviewed ? 'Review completed.' : 'Review draft saved.')
-      await refreshQueue(markReviewed ? undefined : updated.id)
+      setLastSavedReceipt(updated)
+      setQuestionResponse(null)
+      if (editId) {
+        setNotice('Receipt updated.')
+        setArchiveVersion((version) => version + 1)
+        navigate('/archive')
+      } else {
+        setNotice(markReviewed ? 'Review completed.' : 'Review draft saved.')
+        await refreshQueue(markReviewed ? undefined : updated.id)
+      }
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not save this review.')
     } finally {
@@ -409,13 +455,13 @@ function ReviewDesk() {
           )}
         </section>
 
-        <ReceiptArchive active={view === 'archive'} refreshVersion={archiveVersion} />
+        <ReceiptArchive active={view === 'archive'} refreshVersion={archiveVersion} updatedReceipt={lastSavedReceipt} />
 
         {view === 'not-found' && <Link className="text-button" to="/">Back to questions</Link>}
 
-        <div id="review-panel" aria-labelledby="page-title" hidden={view !== 'review'}>
-        <section className="workbench" aria-label="Receipt review workspace">
-          <aside className="queue-pane">
+        <div id="review-panel" aria-labelledby="page-title" hidden={view !== 'review' && view !== 'edit'}>
+        <section className={`workbench${editId ? ' is-editing' : ''}`} aria-label={editId ? 'Edit approved receipt' : 'Receipt review workspace'}>
+          <aside className="queue-pane" hidden={!!editId}>
             <div className="pane-heading">
               <div>
                 <h2>Review queue</h2>
@@ -458,11 +504,11 @@ function ReviewDesk() {
             {!draft || !selectedReceipt ? (
               <div className="detail-empty">
                 <span className="empty-mark">—</span>
-                <h2>Select a receipt</h2>
-                <p>Upload a file or choose an item from the queue.</p>
+                <h2>{editId ? editLoading ? 'Loading receipt...' : 'Receipt unavailable' : 'Select a receipt'}</h2>
+                {editId ? <Link to="/archive">Back to archive</Link> : <p>Upload a file or choose an item from the queue.</p>}
               </div>
             ) : (
-              <form onSubmit={(event) => { event.preventDefault(); void saveReview(false) }}>
+              <form aria-busy={saving} onSubmit={(event) => { event.preventDefault(); void saveReview(false) }}>
                 <div className="detail-heading">
                   <div className="document-title">
                     <span className="file-type">{selectedReceipt.fileName.split('.').pop()?.toUpperCase() ?? 'FILE'}</span>
@@ -513,7 +559,7 @@ function ReviewDesk() {
                     <label className="field">
                       <span>Total amount</span>
                       <div className="money-input">
-                        <input type="number" min="0" step="0.01" value={draft.totalAmount} onChange={(event) => updateDraft('totalAmount', event.target.value)} />
+                        <input type="number" min="0" step="0.0001" value={draft.totalAmount} onChange={(event) => updateDraft('totalAmount', event.target.value)} />
                         <input className="currency-input" aria-label="Currency" maxLength={3} value={draft.currency} onChange={(event) => updateDraft('currency', event.target.value.toUpperCase())} placeholder="SEK" />
                       </div>
                     </label>
@@ -545,15 +591,15 @@ function ReviewDesk() {
                           </label>
                           <label className="field line-quantity">
                             <span>Qty</span>
-                            <input type="number" min="0" step="0.01" value={item.quantity} onChange={(event) => updateLineItem(index, { quantity: event.target.value })} />
+                            <input type="number" min="0" step="0.0001" value={item.quantity} onChange={(event) => updateLineItem(index, { quantity: event.target.value })} />
                           </label>
                           <label className="field line-unit-price">
                             <span>Unit price</span>
-                            <input type="number" min="0" step="0.01" value={item.unitPrice} onChange={(event) => updateLineItem(index, { unitPrice: event.target.value })} />
+                            <input type="number" min="0" step="0.0001" value={item.unitPrice} onChange={(event) => updateLineItem(index, { unitPrice: event.target.value })} />
                           </label>
                           <label className="field line-amount">
                             <span>Line total</span>
-                            <input type="number" min="0" step="0.01" value={item.lineTotal} onChange={(event) => updateLineItem(index, { lineTotal: event.target.value })} />
+                            <input type="number" min="0" step="0.0001" value={item.lineTotal} onChange={(event) => updateLineItem(index, { lineTotal: event.target.value })} />
                           </label>
                           <label className="field line-category">
                             <span>Category</span>
@@ -569,8 +615,13 @@ function ReviewDesk() {
                 <div className="form-actions">
                   <span className="save-note">Changes are saved to your local archive.</span>
                   <div>
-                    <button className="button-secondary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save draft'}</button>
-                    <button className="button-primary" type="button" disabled={saving} onClick={() => void saveReview(true)}>{saving ? 'Saving…' : 'Mark reviewed'}</button>
+                    {editId ? <>
+                      <button className="button-secondary edit-action" type="button" disabled={saving} onClick={() => navigate('/archive')}><X size={16} aria-hidden="true" />Cancel</button>
+                      <button className="button-primary edit-action" type="submit" disabled={saving || !requestToken}><Save size={16} aria-hidden="true" />{saving ? 'Saving...' : 'Save changes'}</button>
+                    </> : <>
+                      <button className="button-secondary" type="submit" disabled={saving || !requestToken}>{saving ? 'Saving…' : 'Save draft'}</button>
+                      <button className="button-primary" type="button" disabled={saving || !requestToken} onClick={() => void saveReview(true)}>{saving ? 'Saving…' : 'Mark reviewed'}</button>
+                    </>}
                   </div>
                 </div>
               </form>

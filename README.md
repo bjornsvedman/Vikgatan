@@ -65,9 +65,17 @@ New uploads are then sent to the configured Responses API deployment. Successful
 
 The **Archive** page at `/archive` shows all stored receipts, including reviewed documents, grouped by document year (newest first) with undated receipts last. Sort within each year by category, document date, vendor, or stored amount in either direction. Amount sorting does not convert currencies; use the currency filter when comparing amounts.
 
-Combine year/date-range, category, vendor, currency, and review-status filters, then select **Apply**. Active filters can be removed individually or cleared together. Undated and uncategorized receipts have explicit filter choices. Pages contain up to 25 receipts. Select a receipt to view its read-only details, line items, and original file without losing filters or ordering. Client-side navigation preserves archive state when visiting other pages and returning. The **Review** page at `/review` retains the existing review workflow; editing already reviewed receipts from the archive remains future work.
+Combine year/date-range, category, vendor, currency, and review-status filters, then select **Apply**. Active filters can be removed individually or cleared together. Undated and uncategorized receipts have explicit filter choices. Pages contain up to 25 receipts. Select a receipt to view its details, line items, and original file without losing filters or ordering. Client-side navigation preserves archive state when visiting other pages and returning. The **Review** page at `/review` retains the existing review workflow.
 
 `GET /api/documents/archive` returns a page plus archive-wide filter choices. Supported query parameters are `year`, `undated`, `dateFrom`, `dateTo`, `category`, `uncategorized`, `vendor`, `currency`, `status`, `sortBy` (`date`, `category`, `vendor`, `amount`), `direction` (`asc`, `desc`), `page`, and `pageSize` (1-100, default 25). Category and vendor filters are case-insensitive exact matches. Browsing uses PostgreSQL only, without AI calls.
+
+## Correct an approved receipt
+
+Open a reviewed receipt in the archive and select **Edit receipt**. The edit page at `/archive/{id}/edit` reuses review validation for metadata and line items. **Save changes** keeps the receipt approved and returns to the archive with its existing filters and sorting. **Cancel** discards the edit without saving. The receipt ID, original file, and content hash are preserved; saved corrections immediately affect archive filters and PostgreSQL totals. Invalid input leaves the stored receipt unchanged and keeps the draft available for correction.
+
+Content changes invalidate the stored embedding and its model metadata so old document content cannot be used for vector matching. Unchanged normalized content retains its embedding. Editing does not call Foundry or automatically regenerate embeddings: invalidated receipts remain available through archive browsing and SQL queries, and may appear in the bounded recent-receipt fallback, but are excluded from vector matching until re-embedded. Embedding backfill remains deferred.
+
+API clients can use `PUT /api/documents/{id}/review` with `markReviewed: true` for approved corrections. Send the full metadata and line-item snapshot, not only the changed field.
 
 ## Ask questions about receipts
 
@@ -83,7 +91,7 @@ npm run dev
 
 ## Build checks
 
-Vite supports direct navigation and refreshes at `/archive` and `/review`. Any future static deployment must serve the SPA entry point for these frontend routes while keeping `/api` requests routed to the backend.
+Vite supports direct navigation and refreshes at `/archive`, `/archive/{id}/edit`, and `/review`. Any future static deployment must serve the SPA entry point for these frontend routes while keeping `/api` requests routed to the backend.
 
 ```powershell
 dotnet build InvoiceManager.sln

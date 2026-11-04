@@ -466,6 +466,22 @@ h3 {
   box-shadow: 0 14px 40px rgba(33, 54, 43, 0.055);
 }
 
+.workbench.is-editing {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workbench.is-editing .detail-pane {
+  width: min(100%, 1000px);
+  margin: 0 auto;
+}
+
+.edit-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
 .queue-pane {
   min-width: 0;
   border-right: 1px solid var(--line);

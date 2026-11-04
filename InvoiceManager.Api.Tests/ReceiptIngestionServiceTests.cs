@@ -290,6 +290,152 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ReviewAsync_ApprovedCategoryCorrection_PreservesApprovalAndInvalidatesEmbedding()
+    {
+        var receipt = CreateReceipt(ReceiptProcessingStatus.Completed, DateTimeOffset.UtcNow.AddDays(-1));
+        receipt.Vendor = "Tile House";
+        receipt.DocumentDate = new DateOnly(2024, 5, 12);
+        receipt.Currency = "SEK";
+        receipt.TotalAmount = 125.50m;
+        receipt.Category = "Paint";
+        receipt.Embedding = new Pgvector.Vector(new float[FoundryEmbeddingOptions.DefaultDimensions]);
+        receipt.EmbeddingModel = "previous-model";
+        receipt.EmbeddingModelVersion = "previous-version";
+        var originalPath = receipt.FilePath;
+        var originalHash = receipt.ContentHash;
+        _dbContext.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+
+        var result = await _reviewService.ReviewAsync(receipt.Id, new UpdateReceiptReviewRequest
+        {
+            Vendor = receipt.Vendor,
+            DocumentDate = receipt.DocumentDate,
+            Currency = receipt.Currency,
+            TotalAmount = receipt.TotalAmount,
+            Category = "Flooring",
+            MarkReviewed = true
+        }, CancellationToken.None);
+        _dbContext.ChangeTracker.Clear();
+        var saved = await _dbContext.Receipts.SingleAsync(item => item.Id == receipt.Id);
+        var archive = new ReceiptArchiveService(_dbContext);
+        var oldCategory = await archive.BrowseAsync(new(Category: "Paint"), CancellationToken.None);
+        var newCategory = await archive.BrowseAsync(new(Category: "Flooring"), CancellationToken.None);
+        var total = await _dbContext.Receipts.Where(item => item.Category == "Flooring"
+            && item.ProcessingStatus == ReceiptProcessingStatus.Completed).SumAsync(item => item.TotalAmount);
+
+        Assert.Equal(ReceiptReviewStatus.Updated, result.Status);
+        Assert.Equal(ReceiptProcessingStatus.Completed, saved.ProcessingStatus);
+        Assert.Equal("Flooring", saved.Category);
+        Assert.Equal(originalPath, saved.FilePath);
+        Assert.Equal(originalHash, saved.ContentHash);
+        Assert.True(saved.UpdatedAtUtc > saved.CreatedAtUtc);
+        Assert.Null(saved.Embedding);
+        Assert.Null(saved.EmbeddingModel);
+        Assert.Null(saved.EmbeddingModelVersion);
+        Assert.Empty(oldCategory.Items);
+        Assert.Equal(receipt.Id, Assert.Single(newCategory.Items).Id);
+        Assert.Equal(125.50m, total);
+    }
+
+    [Fact]
+    public async Task ReviewAsync_ApprovedUnchangedContent_KeepsEmbeddingUntilLineItemsChange()
+    {
+        var receipt = CreateReceipt(ReceiptProcessingStatus.Completed, DateTimeOffset.UtcNow.AddDays(-1));
+        receipt.Vendor = "Tile House";
+        receipt.DocumentDate = new DateOnly(2024, 5, 12);
+        receipt.Currency = "SEK";
+        receipt.TotalAmount = 125.50m;
+        receipt.Category = "Flooring";
+        receipt.Embedding = new Pgvector.Vector(new float[FoundryEmbeddingOptions.DefaultDimensions]);
+        receipt.EmbeddingModel = "previous-model";
+        receipt.LineItems.Add(new ReceiptLineItem { Description = "Tiles", Quantity = 10, UnitPrice = 12.55m, LineTotal = 125.50m });
+        _dbContext.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+        var request = new UpdateReceiptReviewRequest
+        {
+            Vendor = " Tile House ",
+            DocumentDate = receipt.DocumentDate,
+            Currency = "sek",
+            TotalAmount = receipt.TotalAmount,
+            Category = receipt.Category,
+            MarkReviewed = true,
+            LineItems = [new() { Description = " Tiles ", Quantity = 10, UnitPrice = 12.55m, LineTotal = 125.50m }]
+        };
+
+        await _reviewService.ReviewAsync(receipt.Id, request, CancellationToken.None);
+        _dbContext.ChangeTracker.Clear();
+        var unchanged = await _dbContext.Receipts.SingleAsync(item => item.Id == receipt.Id);
+        Assert.NotNull(unchanged.Embedding);
+        Assert.Equal("previous-model", unchanged.EmbeddingModel);
+
+        var result = await _reviewService.ReviewAsync(receipt.Id, request with
+        {
+            Description = "Corrected tile purchase",
+            TotalAmount = 150m,
+            LineItems = [new() { Description = "Corrected tiles", Quantity = 12, UnitPrice = 12.50m, LineTotal = 150m, Category = "Flooring" }]
+        }, CancellationToken.None);
+        _dbContext.ChangeTracker.Clear();
+        var corrected = await _dbContext.Receipts.Include(item => item.LineItems).SingleAsync(item => item.Id == receipt.Id);
+
+        Assert.Equal(ReceiptReviewStatus.Updated, result.Status);
+        Assert.Equal(ReceiptProcessingStatus.Completed, corrected.ProcessingStatus);
+        Assert.Equal(150m, corrected.TotalAmount);
+        Assert.Equal("Corrected tile purchase", corrected.Description);
+        Assert.Equal("Corrected tiles", Assert.Single(corrected.LineItems).Description);
+        Assert.Equal(12m, corrected.LineItems[0].Quantity);
+        Assert.Null(corrected.Embedding);
+    }
+
+    [Theory]
+    [InlineData("category")]
+    [InlineData("vendor")]
+    [InlineData("amount")]
+    [InlineData("date")]
+    [InlineData("lineItem")]
+    public async Task ReviewAsync_InvalidApprovedEdit_DoesNotChangeStoredReceipt(string invalidField)
+    {
+        var receipt = CreateReceipt(ReceiptProcessingStatus.Completed, DateTimeOffset.UtcNow.AddDays(-1));
+        receipt.Vendor = "Tile House";
+        receipt.DocumentDate = new DateOnly(2024, 5, 12);
+        receipt.Currency = "SEK";
+        receipt.TotalAmount = 125.50m;
+        receipt.Category = "Flooring";
+        receipt.Embedding = new Pgvector.Vector(new float[FoundryEmbeddingOptions.DefaultDimensions]);
+        _dbContext.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+        var request = new UpdateReceiptReviewRequest
+        {
+            Vendor = receipt.Vendor,
+            DocumentDate = receipt.DocumentDate,
+            Currency = receipt.Currency,
+            TotalAmount = receipt.TotalAmount,
+            Category = receipt.Category,
+            MarkReviewed = true
+        };
+        request = invalidField switch
+        {
+            "category" => request with { Category = new string('x', 129) },
+            "vendor" => request with { Vendor = null },
+            "amount" => request with { TotalAmount = -1 },
+            "date" => request with { DocumentDate = null },
+            _ => request with { LineItems = [new() { Description = "" }] }
+        };
+
+        var result = await _reviewService.ReviewAsync(receipt.Id, request, CancellationToken.None);
+        _dbContext.ChangeTracker.Clear();
+        var saved = await _dbContext.Receipts.SingleAsync(item => item.Id == receipt.Id);
+
+        Assert.Equal(ReceiptReviewStatus.Invalid, result.Status);
+        Assert.NotEmpty(result.ValidationErrors);
+        Assert.Equal(ReceiptProcessingStatus.Completed, saved.ProcessingStatus);
+        Assert.Equal("Tile House", saved.Vendor);
+        Assert.Equal("Flooring", saved.Category);
+        Assert.Equal(125.50m, saved.TotalAmount);
+        Assert.NotNull(saved.Embedding);
+        Assert.Equal(saved.CreatedAtUtc, saved.UpdatedAtUtc);
+    }
+
+    [Fact]
     public async Task ReviewAsync_IncompleteCompletion_ReturnsValidationErrorsWithoutChangingReceipt()
     {
         var receipt = CreateReceipt(ReceiptProcessingStatus.Pending, DateTimeOffset.UtcNow);

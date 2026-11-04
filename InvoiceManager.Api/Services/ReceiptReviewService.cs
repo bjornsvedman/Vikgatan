@@ -46,6 +46,25 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
             return new(ReceiptReviewStatus.Invalid, null, errors);
         }
 
+        var contentChanged = receipt.Vendor != NormalizeOptionalText(request.Vendor)
+            || receipt.DocumentDate != request.DocumentDate
+            || receipt.Currency != request.Currency?.Trim().ToUpperInvariant()
+            || receipt.TotalAmount != request.TotalAmount
+            || receipt.Category != NormalizeOptionalText(request.Category)
+            || receipt.Description != NormalizeOptionalText(request.Description)
+            || !receipt.LineItems.Select(item => new UpdateReceiptLineItemRequest
+            {
+                Description = item.Description,
+                Quantity = item.Quantity,
+                UnitPrice = item.UnitPrice,
+                LineTotal = item.LineTotal,
+                Category = item.Category
+            }).SequenceEqual((request.LineItems ?? []).Select(item => item with
+            {
+                Description = item.Description!.Trim(),
+                Category = NormalizeOptionalText(item.Category)
+            }));
+
         receipt.Vendor = NormalizeOptionalText(request.Vendor);
         receipt.DocumentDate = request.DocumentDate;
         receipt.Currency = request.Currency?.Trim().ToUpperInvariant();
@@ -57,6 +76,12 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
             : ReceiptProcessingStatus.NeedsReview;
         receipt.ProcessingError = null;
         receipt.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        if (contentChanged)
+        {
+            receipt.Embedding = null;
+            receipt.EmbeddingModel = null;
+            receipt.EmbeddingModelVersion = null;
+        }
         receipt.LineItems.Clear();
 
         foreach (var item in request.LineItems ?? [])

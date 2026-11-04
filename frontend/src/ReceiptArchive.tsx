@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter, RotateCcw, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter, Pencil, RotateCcw, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import type { Receipt, ReceiptStatus } from './ReviewDesk'
 import './ReceiptArchive.css'
 
@@ -38,7 +39,7 @@ function statusLabel(status: string) {
   return status === 'Completed' ? 'Reviewed' : status === 'NeedsReview' ? 'Needs review' : status
 }
 
-function ReceiptArchive({ active, refreshVersion }: { active: boolean, refreshVersion: number }) {
+function ReceiptArchive({ active, refreshVersion, updatedReceipt }: { active: boolean, refreshVersion: number, updatedReceipt: Receipt | null }) {
   const [filters, setFilters] = useState<Filters>(emptyFilters)
   const [applied, setApplied] = useState<Filters>(emptyFilters)
   const [sortBy, setSortBy] = useState('date')
@@ -82,7 +83,9 @@ function ReceiptArchive({ active, refreshVersion }: { active: boolean, refreshVe
         const body = await response.json() as ArchivePage
         if (!controller.signal.aborted) {
           setResult(body)
-          setSelected((current) => current ? body.items.find((receipt) => receipt.id === current.id) ?? current : null)
+          setSelected((current) => current
+            ? body.items.find((receipt) => receipt.id === current.id) ?? (updatedReceipt?.id === current.id ? updatedReceipt : current)
+            : null)
         }
       } catch (requestError) {
         if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : 'Could not load archive.')
@@ -92,7 +95,7 @@ function ReceiptArchive({ active, refreshVersion }: { active: boolean, refreshVe
     }
     void load()
     return () => controller.abort()
-  }, [active, query, refreshVersion, retry])
+  }, [active, query, refreshVersion, retry, updatedReceipt])
 
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -212,6 +215,7 @@ function ReceiptArchive({ active, refreshVersion }: { active: boolean, refreshVe
             <button type="button" className="archive-icon" title="Close receipt details" aria-label="Close receipt details" onClick={() => { setSelected(null); triggerRef.current?.focus() }}><X size={18} /></button>
           </div>
           <p className="archive-file-name">{selected.fileName}</p>
+          {selected.status === 'Completed' && <Link className="archive-original" to={`/archive/${selected.id}/edit`}><Pencil size={16} aria-hidden="true" />Edit receipt</Link>}
           <dl className="archive-metadata">
             <div><dt>Date</dt><dd>{selected.documentDate ?? 'Not set'}</dd></div>
             <div><dt>Category</dt><dd>{selected.category || 'Uncategorized'}</dd></div>

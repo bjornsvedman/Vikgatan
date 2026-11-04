@@ -35,7 +35,7 @@ GET {{baseUrl}}/api/documents/archive?year=2024&category=Flooring&dateFrom=2024-
 ### Find undated and uncategorized receipts
 GET {{baseUrl}}/api/documents/archive?undated=true&uncategorized=true
 
-### Review and complete a receipt
+### Review, approve, or correct an approved receipt; keep markReviewed=true and send all fields/items
 PUT {{baseUrl}}/api/documents/{{receiptId}}/review
 X-CSRF-TOKEN: {{csrfToken}}
 Content-Type: application/json
