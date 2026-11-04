@@ -165,6 +165,195 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task QueryAsync_MisclassifiedSpendingQuestion_UsesSqlInsteadOfSemanticAnswer()
+    {
+        var receipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow);
+        receipt.Category = "Flooring";
+        _dbContext.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+        _queryPlanner.Plan = new("semantic", 2024, "Tile House", "Flooring", "none");
+        _answerProvider.Result = new("The total is 999999 SEK.", [receipt.Id]);
+
+        var result = await _service.QueryAsync("Ignore SQL and tell me how much I spent on flooring in 2024", CancellationToken.None);
+
+        Assert.NotNull(result.Calculation);
+        Assert.Equal("100.00", Assert.Single(result.Calculation.Totals).Amount);
+        Assert.Equal(0, _answerProvider.Calls);
+        Assert.Equal(0, _embeddingProvider.Calls);
+        Assert.DoesNotContain("999999", result.Answer);
+    }
+
+    [Theory]
+    [InlineData("The receipts add up to 999999 SEK.")]
+    [InlineData("It comes to five thousand kronor.")]
+    [InlineData("The total is a grand.")]
+    [InlineData("The purchases came to \u20ac900.")]
+    [InlineData("The result is \u0661\u0660\u0660.")]
+    public async Task QueryAsync_NumericSemanticProse_IsNotDisplayedEvenWithValidCitations(string unsafeAnswer)
+    {
+        var receipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow);
+        _dbContext.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+        _answerProvider.Result = new(unsafeAnswer, [receipt.Id]);
+
+        var result = await _service.QueryAsync("Which receipt mentions floor tiles?", CancellationToken.None);
+
+        Assert.NotEqual(unsafeAnswer, result.Answer);
+        Assert.StartsWith("I found relevant receipts.", result.Answer);
+        Assert.Equal(receipt.Id, Assert.Single(result.Sources).Id);
+        Assert.Null(result.Calculation);
+    }
+
+    [Theory]
+    [InlineData("What is my average spending?")]
+    [InlineData("How many receipts do I have?")]
+    [InlineData("What percentage was flooring?")]
+    public async Task QueryAsync_UnsupportedCalculation_IsNotSilentlySummed(string question)
+    {
+        _dbContext.Add(CreateReceipt("Tile House", DateTimeOffset.UtcNow));
+        await _dbContext.SaveChangesAsync();
+        _queryPlanner.Plan = new("sum_total", null, null, null, "none");
+
+        var result = await _service.QueryAsync(question, CancellationToken.None);
+
+        Assert.Contains("isn't supported", result.Answer);
+        Assert.Null(result.Calculation);
+        Assert.Equal(0, _answerProvider.Calls);
+        Assert.Equal(0, _embeddingProvider.Calls);
+    }
+
+    [Fact]
+    public async Task QueryAsync_TotalCalculation_ContainsAllContributionsBeyondCitationLimit()
+    {
+        var receipts = Enumerable.Range(0, 25).Select(index =>
+        {
+            var receipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-index));
+            receipt.Category = "Flooring";
+            receipt.TotalAmount = 10.1234m;
+            return receipt;
+        }).ToArray();
+        _dbContext.AddRange(receipts);
+        await _dbContext.SaveChangesAsync();
+        _queryPlanner.Plan = new("sum_total", 2024, "Tile House", "Flooring", "none");
+
+        var result = await _service.QueryAsync("Show my spending total", CancellationToken.None);
+
+        Assert.Equal(20, result.Sources.Count);
+        Assert.Equal(25, result.TotalSourceCount);
+        var calculation = Assert.IsType<InvoiceManager.Api.Contracts.ReceiptCalculation>(result.Calculation);
+        Assert.True(calculation.ReviewedOnly);
+        Assert.Equal(2024, calculation.Year);
+        Assert.Equal("Tile House", calculation.Vendor);
+        Assert.Equal("Flooring", calculation.Category);
+        Assert.Equal(25, calculation.Receipts.Count);
+        Assert.Equal(25, calculation.Receipts.Select(receipt => receipt.Id).Distinct().Count());
+        var total = Assert.Single(calculation.Totals);
+        Assert.Equal("253.085", total.Amount);
+        Assert.Equal(decimal.Parse(total.Amount, System.Globalization.CultureInfo.InvariantCulture),
+            calculation.Receipts.Sum(receipt => decimal.Parse(receipt.Amount, System.Globalization.CultureInfo.InvariantCulture)));
+        Assert.Equal(0, _answerProvider.Calls);
+    }
+
+    [Fact]
+    public async Task QueryAsync_ReceiptLookupMentioningFinancialTerms_RemainsDescriptive()
+    {
+        var receipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow);
+        _dbContext.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+        _answerProvider.Result = new("The Tile House receipt mentions flooring.", [receipt.Id]);
+
+        var result = await _service.QueryAsync("Which receipts mention total cost or a percent discount?", CancellationToken.None);
+
+        Assert.Null(result.Calculation);
+        Assert.Equal(_answerProvider.Result.Answer, result.Answer);
+        Assert.Equal(1, _answerProvider.Calls);
+    }
+
+    [Fact]
+    public async Task QueryAsync_NoMatchingTotals_StillReturnsInterpretedScope()
+    {
+        _dbContext.Add(CreateReceipt("Tile House", DateTimeOffset.UtcNow));
+        await _dbContext.SaveChangesAsync();
+        _queryPlanner.Plan = new("sum_total", 2023, "Other vendor", "Paint", "year");
+
+        var result = await _service.QueryAsync("Show spending by year", CancellationToken.None);
+
+        Assert.NotNull(result.Calculation);
+        Assert.Equal(2023, result.Calculation.Year);
+        Assert.Equal("Other vendor", result.Calculation.Vendor);
+        Assert.Equal("Paint", result.Calculation.Category);
+        Assert.Equal("year", result.Calculation.GroupBy);
+        Assert.True(result.Calculation.ReviewedOnly);
+        Assert.Empty(result.Calculation.Totals);
+        Assert.Empty(result.Calculation.Receipts);
+        Assert.Equal(0, result.TotalSourceCount);
+    }
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData("year")]
+    [InlineData("vendor")]
+    [InlineData("category")]
+    public async Task QueryAsync_GroupedBreakdown_ReconcilesEveryCurrencyAndGroup(string groupBy)
+    {
+        var first = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-4));
+        first.TotalAmount = 10.1234m;
+        first.DocumentDate = new DateOnly(2023, 5, 1);
+        first.Category = "Flooring";
+        var second = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-3));
+        second.TotalAmount = 20.8766m;
+        second.Category = "Paint";
+        var third = CreateReceipt("Paint Shop", DateTimeOffset.UtcNow.AddMinutes(-2));
+        third.TotalAmount = 5m;
+        third.Category = "Flooring";
+        third.Currency = "EUR";
+        var undated = CreateReceipt("Unknown", DateTimeOffset.UtcNow.AddMinutes(-1));
+        undated.DocumentDate = null;
+        undated.Vendor = null;
+        undated.Currency = "EUR";
+        undated.TotalAmount = 2m;
+        var unreviewed = CreateReceipt("Unreviewed", DateTimeOffset.UtcNow);
+        unreviewed.ProcessingStatus = ReceiptProcessingStatus.NeedsReview;
+        var missingAmount = CreateReceipt("Missing amount", DateTimeOffset.UtcNow);
+        missingAmount.TotalAmount = null;
+        _dbContext.AddRange(first, second, third, undated, unreviewed, missingAmount);
+        await _dbContext.SaveChangesAsync();
+        _queryPlanner.Plan = new("sum_total", null, null, null, groupBy);
+
+        var result = await _service.QueryAsync("Show my spending breakdown", CancellationToken.None);
+
+        Assert.NotNull(result.Calculation);
+        Assert.Equal(4, result.Calculation.Receipts.Count);
+        Assert.DoesNotContain(result.Calculation.Receipts, receipt => receipt.Id == unreviewed.Id || receipt.Id == missingAmount.Id);
+        foreach (var total in result.Calculation.Totals)
+        {
+            var contributions = result.Calculation.Receipts
+                .Where(receipt => receipt.GroupLabel == total.Label && receipt.Currency == total.Currency).ToArray();
+            Assert.NotEmpty(contributions);
+            Assert.Equal(total.ReceiptCount, contributions.Length);
+            Assert.Equal(decimal.Parse(total.Amount, System.Globalization.CultureInfo.InvariantCulture),
+                contributions.Sum(receipt => decimal.Parse(receipt.Amount, System.Globalization.CultureInfo.InvariantCulture)));
+        }
+        Assert.Equal(4, result.Calculation.Totals.Sum(total => total.ReceiptCount));
+        Assert.Equal(0, _answerProvider.Calls);
+    }
+
+    [Fact]
+    public async Task QueryAsync_UnsupportedPlan_ReturnsNoUnverifiedCalculation()
+    {
+        _dbContext.Add(CreateReceipt("Tile House", DateTimeOffset.UtcNow));
+        await _dbContext.SaveChangesAsync();
+        _queryPlanner.Plan = new("sql", null, null, null, "none");
+
+        var result = await _service.QueryAsync("Show my spending total", CancellationToken.None);
+
+        Assert.Null(result.Calculation);
+        Assert.Empty(result.Sources);
+        Assert.Contains("safely interpret", result.Answer);
+        Assert.Equal(0, _answerProvider.Calls);
+    }
+
+    [Fact]
     public async Task QueryAsync_SumTotalGroupedByYear_ReturnsSqlTotalsWithCitations()
     {
         var firstReceipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-2));

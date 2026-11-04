@@ -60,7 +60,7 @@ public static class ReceiptEndpoints
         documents.MapPost("/query", QueryAsync)
             .WithName("QueryReceipts")
             .WithSummary("Ask a question about stored receipts")
-            .WithDescription("Answers from a bounded set of receipts and returns citations for source documents.")
+            .WithDescription("Returns descriptive answers with verified citations, or SQL spending totals with interpreted filters and every contributing receipt. Summary citations are capped; calculation inputs are not.")
             .Accepts<ReceiptQuestionRequest>("application/json")
             .Produces<ReceiptQuestionResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest);

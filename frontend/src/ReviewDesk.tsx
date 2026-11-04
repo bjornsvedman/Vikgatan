@@ -2,6 +2,7 @@ import { useEffect, useState, type ChangeEvent } from 'react'
 import { Archive, ClipboardCheck, MessageSquare, Save, Search, X } from 'lucide-react'
 import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom'
 import ReceiptArchive from './ReceiptArchive'
+import CalculationDetails, { type ReceiptCalculation } from './CalculationDetails'
 import './ReviewDesk.css'
 
 export type ReceiptStatus = 'Pending' | 'Processing' | 'NeedsReview' | 'Completed' | 'Failed'
@@ -44,6 +45,8 @@ type ReceiptCitation = {
 type ReceiptQuestionResponse = {
   answer: string
   sources: ReceiptCitation[]
+  totalSourceCount?: number | null
+  calculation?: ReceiptCalculation | null
 }
 
 type DraftLineItem = {
@@ -431,6 +434,7 @@ function ReviewDesk() {
           {questionResponse && (
             <div className="question-answer" role="status">
               <p>{questionResponse.answer}</p>
+              {questionResponse.calculation && <CalculationDetails calculation={questionResponse.calculation} />}
               {questionResponse.sources.length > 0 && (
                 <div className="citation-list" aria-label="Sources">
                   {questionResponse.sources.map((source) => (

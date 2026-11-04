@@ -1,4 +1,6 @@
+using System.Data;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using InvoiceManager.Api.Contracts;
 using InvoiceManager.Api.Data;
 using InvoiceManager.Api.Documents;
@@ -20,6 +22,18 @@ public sealed class ReceiptQuestionService(
     private const int MaximumSemanticMatches = 8;
     private const int MaximumLineItemsPerDocument = 20;
     private const int MaximumAggregateCitations = 20;
+    private static readonly Regex ReceiptLookupPattern = new(
+        @"^\s*(which|find|list|show(?: me)?)\s+(receipts?|invoices?|documents?)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex TotalQuestionPattern = new(
+        @"\b(how much|total(?:s)?|sum|spent|spending|overall cost|combined cost|altogether)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex UnsupportedCalculationPattern = new(
+        @"\b(average|median|percentage|percent|how many|count of|difference between|cheapest|most expensive)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex UnsafeSemanticAnswerPattern = new(
+        @"[\p{N}\p{Sc}%+=]|\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion|dozen|half|quarter|double|triple|grand|total(?:s|ed|ing)?|sum|amount|spent|spending|cost(?:s)?|average|median|percentage|percent|sek|eur|usd|gbp|dkk|nok|kr|kronor|dollars?|euros?|pounds?)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public async Task<ReceiptQuestionResponse> QueryAsync(
         string question,
@@ -48,9 +62,15 @@ public sealed class ReceiptQuestionService(
             return new("I couldn't safely interpret that question. Try asking about a specific receipt or total.", []);
         }
 
-        if (string.Equals(plan.QueryType, "sum_total", StringComparison.Ordinal))
+        var isReceiptLookup = ReceiptLookupPattern.IsMatch(normalizedQuestion);
+        if (!isReceiptLookup && UnsupportedCalculationPattern.IsMatch(normalizedQuestion))
         {
-            return await AnswerTotalAsync(plan, cancellationToken);
+            return new("That calculation isn't supported yet. Ask for a spending total by year, vendor, or category.", []);
+        }
+
+        if (plan.QueryType == "sum_total" || (!isReceiptLookup && TotalQuestionPattern.IsMatch(normalizedQuestion)))
+        {
+            return await AnswerTotalAsync(plan with { QueryType = "sum_total" }, cancellationToken);
         }
 
         var documents = await FindContextAsync(normalizedQuestion, cancellationToken);
@@ -85,7 +105,10 @@ public sealed class ReceiptQuestionService(
                 Enum.Parse<ReceiptProcessingStatus>(document.Status)))
             .ToArray();
 
-        return new(draft.Answer, sources, sources.Length);
+        var answer = UnsafeSemanticAnswerPattern.IsMatch(draft.Answer)
+            ? "I found relevant receipts. Their stored details are available in the sources. Ask for a spending total for a database-calculated answer."
+            : draft.Answer;
+        return new(answer, sources, sources.Length);
     }
 
     private static bool IsValidPlan(ReceiptQueryPlan plan) =>
@@ -99,6 +122,9 @@ public sealed class ReceiptQuestionService(
         ReceiptQueryPlan plan,
         CancellationToken cancellationToken)
     {
+        await using var snapshot = dbContext.Database.CurrentTransaction is null
+            ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
+            : null;
         var query = dbContext.Receipts
             .AsNoTracking()
             .Where(receipt => receipt.ProcessingStatus == ReceiptProcessingStatus.Completed
@@ -180,7 +206,9 @@ public sealed class ReceiptQuestionService(
 
         if (aggregates.Count == 0)
         {
-            return new("No reviewed receipt totals matched those filters.", [], 0);
+            if (snapshot is not null) await snapshot.CommitAsync(cancellationToken);
+            return new("No reviewed receipt totals matched those filters.", [], 0,
+                new(plan.Year, vendor, category, plan.GroupBy, true, [], []));
         }
 
         var matchingCount = aggregates.Sum(aggregate => aggregate.Count);
@@ -193,10 +221,14 @@ public sealed class ReceiptQuestionService(
         var sourceReceipts = await query
             .OrderByDescending(receipt => receipt.CreatedAtUtc)
             .ThenBy(receipt => receipt.Id)
-            .Take(MaximumAggregateCitations)
+            .Select(receipt => new
+            {
+                receipt.Id, receipt.FileName, receipt.Vendor, receipt.DocumentDate,
+                receipt.Category, receipt.Currency, receipt.TotalAmount, receipt.ProcessingStatus
+            })
             .ToListAsync(cancellationToken);
 
-        var citations = sourceReceipts.Select(receipt => new ReceiptQuestionCitation(
+        var citations = sourceReceipts.Take(MaximumAggregateCitations).Select(receipt => new ReceiptQuestionCitation(
                 receipt.Id,
                 receipt.FileName,
                 receipt.Vendor,
@@ -206,25 +238,43 @@ public sealed class ReceiptQuestionService(
                 receipt.ProcessingStatus))
             .ToArray();
 
+        var totals = aggregates.OrderBy(aggregate => aggregate.Year)
+            .ThenBy(aggregate => aggregate.Label).ThenBy(aggregate => aggregate.Currency)
+            .Select(aggregate => new ReceiptCalculationTotal(
+                AggregateLabel(plan.GroupBy, aggregate.Year, aggregate.Label), aggregate.Currency,
+                aggregate.Amount.ToString("0.00##", CultureInfo.InvariantCulture), aggregate.Count))
+            .ToArray();
+        var contributions = sourceReceipts.Select(receipt => new ReceiptCalculationReceipt(
+            receipt.Id, receipt.FileName, receipt.Vendor, receipt.DocumentDate, receipt.Category,
+            receipt.Currency ?? "Unknown currency",
+            receipt.TotalAmount!.Value.ToString("0.00##", CultureInfo.InvariantCulture),
+            AggregateLabel(plan.GroupBy, receipt.DocumentDate?.Year,
+                plan.GroupBy == "vendor" ? receipt.Vendor ?? "Unknown vendor" : receipt.Category ?? "Uncategorized")))
+            .ToArray();
+        if (snapshot is not null) await snapshot.CommitAsync(cancellationToken);
+
         return new ReceiptQuestionResponse(
             matchingCount > MaximumAggregateCitations
                 ? $"{answer}\nShowing {MaximumAggregateCitations} of {matchingCount} matching receipt sources."
                 : answer,
             citations,
-            matchingCount);
+            matchingCount,
+            new(plan.Year, vendor, category, plan.GroupBy, true, totals, contributions));
     }
+
+    private static string AggregateLabel(string groupBy, int? year, string? label) => groupBy switch
+    {
+        "year" => year?.ToString(CultureInfo.InvariantCulture) ?? "Unknown year",
+        "vendor" or "category" => label ?? "Unknown",
+        _ => "Total recorded spend"
+    };
 
     private static string FormatAggregate(string groupBy, SpendAggregate aggregate)
     {
-        var label = groupBy switch
-        {
-            "year" => aggregate.Year?.ToString() ?? "Unknown year",
-            "vendor" or "category" => aggregate.Label ?? "Unknown",
-            _ => "Total recorded spend"
-        };
+        var label = AggregateLabel(groupBy, aggregate.Year, aggregate.Label);
 
         var receiptLabel = aggregate.Count == 1 ? "reviewed receipt" : "reviewed receipts";
-        return $"{label} / {aggregate.Currency}: {aggregate.Amount.ToString("0.00", CultureInfo.InvariantCulture)} ({aggregate.Count} {receiptLabel})";
+        return $"{label} / {aggregate.Currency}: {aggregate.Amount.ToString("0.00##", CultureInfo.InvariantCulture)} ({aggregate.Count} {receiptLabel})";
     }
 
     private sealed record SpendAggregate(int? Year, string? Label, string Currency, decimal Amount, int Count);

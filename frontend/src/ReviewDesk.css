@@ -383,6 +383,68 @@ h3 {
   white-space: pre-wrap;
 }
 
+.calculation-details {
+  margin-top: 16px;
+  min-width: 0;
+}
+
+.calculation-scope {
+  padding: 14px 0;
+  border-block: 1px solid var(--line);
+}
+
+.calculation-scope > strong {
+  color: var(--forest);
+  font-size: 12px;
+}
+
+.calculation-scope dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0 0;
+}
+
+.calculation-scope dt { color: var(--muted); font-size: 11px; }
+.calculation-scope dd { margin: 4px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+
+.calculation-breakdown { margin-top: 14px; }
+.calculation-breakdown > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 38px;
+  color: var(--forest);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.calculation-breakdown > summary::before { content: '+'; flex-shrink: 0; }
+.calculation-breakdown[open] > summary::before { content: '-'; }
+.calculation-breakdown > summary:focus-visible { outline: 2px solid var(--forest); outline-offset: 3px; }
+.calculation-breakdown > summary svg { flex-shrink: 0; }
+.calculation-group { margin: 18px 0; }
+.calculation-group h3 { font-size: 14px; margin-bottom: 10px; overflow-wrap: anywhere; }
+.calculation-table-scroll { width: 100%; overflow-x: auto; }
+.calculation-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; background: var(--surface); }
+.calculation-table th, .calculation-table td { padding: 11px 12px; text-align: left; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.calculation-table th { color: var(--muted); font-size: 11px; }
+.calculation-table th:first-child { width: 36%; }
+.calculation-table td:last-child, .calculation-table th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.calculation-table td a { display: flex; align-items: center; gap: 8px; color: var(--forest); text-decoration: none; }
+.calculation-table td a:hover { text-decoration: underline; }
+.calculation-table td a span { min-width: 0; }
+.calculation-table td a svg { flex-shrink: 0; }
+.calculation-table small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+.calculation-table tfoot th, .calculation-table tfoot td { color: var(--ink); background: var(--green-pale); font-weight: 650; }
+
+@media (max-width: 680px) {
+  .calculation-scope dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .calculation-table { min-width: 580px; }
+}
+
 .citation-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));

@@ -70,3 +70,12 @@ Content-Type: application/json
 {
 	"question": "Which receipts mention flooring work?"
 }
+
+### Calculate totals with interpreted scope and every contributing receipt in calculation
+POST {{baseUrl}}/api/documents/query
+X-CSRF-TOKEN: {{csrfToken}}
+Content-Type: application/json
+
+{
+	"question": "Show my total spending grouped by document year."
+}
