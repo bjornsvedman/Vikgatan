@@ -30,6 +30,8 @@ builder.Services.Configure<FoundryExtractionOptions>(
 builder.Services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
 builder.Services.AddHttpClient<IEmbeddingProvider, FoundryEmbeddingProvider>();
 builder.Services.AddHttpClient<IReceiptExtractionProvider, FoundryReceiptExtractionProvider>();
+builder.Services.AddHttpClient<IReceiptAnswerProvider, FoundryReceiptAnswerProvider>();
+builder.Services.AddHttpClient<IReceiptQueryPlanner, FoundryReceiptQueryPlanner>();
 
 var connectionString = builder.Configuration.GetConnectionString("Postgres");
 if (string.IsNullOrWhiteSpace(connectionString))
@@ -42,6 +44,7 @@ builder.Services.AddDbContext<InvoiceDbContext>(options =>
 	options.UseNpgsql(connectionString, postgres => postgres.UseVector()));
 builder.Services.AddScoped<IReceiptIngestionService, ReceiptIngestionService>();
 builder.Services.AddScoped<IReceiptReviewService, ReceiptReviewService>();
+builder.Services.AddScoped<IReceiptQuestionService, ReceiptQuestionService>();
 
 var app = builder.Build();
 

@@ -50,6 +50,14 @@ public static class ReceiptEndpoints
             .Produces(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest);
 
+        documents.MapPost("/query", QueryAsync)
+            .WithName("QueryReceipts")
+            .WithSummary("Ask a question about stored receipts")
+            .WithDescription("Answers from a bounded set of receipts and returns citations for source documents.")
+            .Accepts<ReceiptQuestionRequest>("application/json")
+            .Produces<ReceiptQuestionResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest);
+
         return app;
     }
 
@@ -134,5 +142,21 @@ public static class ReceiptEndpoints
                 detail: string.Join(" ", result.ValidationErrors)),
             _ => TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError)
         };
+    }
+
+    private static async Task<Results<Ok<ReceiptQuestionResponse>, ProblemHttpResult>> QueryAsync(
+        ReceiptQuestionRequest request,
+        IReceiptQuestionService questionService,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Question) || request.Question.Length > 2000)
+        {
+            return TypedResults.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "A question between 1 and 2000 characters is required.");
+        }
+
+        var result = await questionService.QueryAsync(request.Question, cancellationToken);
+        return TypedResults.Ok(result);
     }
 }

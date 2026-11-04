@@ -28,6 +28,21 @@ type Receipt = {
   lineItems: ReceiptLineItem[]
 }
 
+type ReceiptCitation = {
+  id: string
+  fileName: string
+  vendor: string | null
+  documentDate: string | null
+  currency: string | null
+  totalAmount: number | null
+  status: ReceiptStatus
+}
+
+type ReceiptQuestionResponse = {
+  answer: string
+  sources: ReceiptCitation[]
+}
+
 type DraftLineItem = {
   key: string
   description: string
@@ -90,6 +105,9 @@ function ReviewDesk() {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [question, setQuestion] = useState('')
+  const [questionResponse, setQuestionResponse] = useState<ReceiptQuestionResponse | null>(null)
+  const [asking, setAsking] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -260,6 +278,33 @@ function ReviewDesk() {
     }
   }
 
+  async function askReceipts(event: ChangeEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const trimmedQuestion = question.trim()
+    if (!trimmedQuestion) return
+
+    setAsking(true)
+    setError('')
+    setQuestionResponse(null)
+    try {
+      const response = await fetch('/api/documents/query', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-TOKEN': requestToken,
+        },
+        body: JSON.stringify({ question: trimmedQuestion }),
+      })
+
+      if (!response.ok) throw await responseError(response)
+      setQuestionResponse((await response.json()) as ReceiptQuestionResponse)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not query receipts.')
+    } finally {
+      setAsking(false)
+    }
+  }
+
   const pendingCount = receipts.filter((receipt) => receipt.status === 'Pending').length
 
   return (
@@ -300,6 +345,53 @@ function ReviewDesk() {
 
         {error && <div className="message message-error" role="alert">{error}</div>}
         {notice && <div className="message message-success" role="status">{notice}</div>}
+
+        <section className="question-panel" aria-label="Ask questions about receipts">
+          <div className="question-heading">
+            <p className="eyebrow">ARCHIVE SEARCH</p>
+            <h2>Ask your receipts</h2>
+          </div>
+          <form className="question-form" onSubmit={(event) => void askReceipts(event)}>
+            <label className="question-field">
+              <span className="sr-only">Question</span>
+              <textarea
+                maxLength={2000}
+                onChange={(event) => setQuestion(event.target.value)}
+                placeholder="Ask about a vendor, purchase, or renovation…"
+                rows={2}
+                value={question}
+              />
+            </label>
+            <button className="button-primary question-button" disabled={asking || !requestToken || !question.trim()} type="submit">
+              {asking ? 'Searching…' : 'Ask'}
+            </button>
+          </form>
+          {questionResponse && (
+            <div className="question-answer" role="status">
+              <p>{questionResponse.answer}</p>
+              {questionResponse.sources.length > 0 && (
+                <div className="citation-list" aria-label="Sources">
+                  {questionResponse.sources.map((source) => (
+                    <a
+                      className="citation-item"
+                      href={`/api/documents/${source.id}/file`}
+                      key={source.id}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      <span className="citation-kind">SOURCE</span>
+                      <span className="citation-name">{source.vendor || source.fileName}</span>
+                      <span className="citation-detail">
+                        {source.documentDate || 'Date not set'} · {formatAmount(source.totalAmount, source.currency)}
+                      </span>
+                      <span className="citation-open">View ↗</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
 
         <section className="workbench" aria-label="Receipt review workspace">
           <aside className="queue-pane">

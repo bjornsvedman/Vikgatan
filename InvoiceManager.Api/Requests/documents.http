@@ -49,3 +49,12 @@ Content-Type: application/json
 
 ### Preview the original uploaded document
 GET {{baseUrl}}/api/documents/{{receiptId}}/file
+
+### Ask a question about stored receipts
+POST {{baseUrl}}/api/documents/query
+X-CSRF-TOKEN: {{csrfToken}}
+Content-Type: application/json
+
+{
+	"question": "Which receipts mention flooring work?"
+}

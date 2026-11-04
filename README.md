@@ -61,6 +61,10 @@ dotnet user-secrets set "Foundry:Extraction:Deployment" "<vision deployment name
 
 New uploads are then sent to the configured Responses API deployment. Successful extraction fills draft metadata, stores the raw structured result, generates a 1536-dimensional embedding from the extracted summary, and queues the receipt as `NeedsReview`. Failed extraction leaves the original file available for manual entry. Use only synthetic documents for unapproved environments.
 
+## Ask questions about receipts
+
+Use the **Ask your receipts** panel to query the stored archive. `POST /api/documents/query` classifies the request, then either embeds it to find similar receipts or calculates exact totals directly in PostgreSQL. Exact totals can be filtered or grouped by year, vendor, and category, and are kept separate by currency; only reviewed receipts are counted. Semantic answers use a bounded context that includes recent receipts without embeddings when the collection is small. Answers include citations that open the original document. The model does not calculate authoritative totals.
+
 ## Frontend
 
 ```powershell
