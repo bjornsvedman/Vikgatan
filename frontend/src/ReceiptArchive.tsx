@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter, Pencil, RotateCcw, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter, Pencil, RotateCcw, Trash2, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import type { Receipt, ReceiptStatus } from './ReviewDesk'
 import './ReceiptArchive.css'
@@ -48,6 +48,7 @@ function ReceiptArchive({ active, refreshVersion, updatedReceipt }: { active: bo
   const [result, setResult] = useState<ArchivePage | null>(null)
   const [pending, setPending] = useState(true)
   const [error, setError] = useState('')
+  const [deleting, setDeleting] = useState(false)
   const [retry, setRetry] = useState(0)
   const [selected, setSelected] = useState<Receipt | null>(null)
   const detailRef = useRef<HTMLElement>(null)
@@ -83,6 +84,9 @@ function ReceiptArchive({ active, refreshVersion, updatedReceipt }: { active: bo
         const body = await response.json() as ArchivePage
         if (!controller.signal.aborted) {
           setResult(body)
+          if (body.items.length === 0 && body.totalCount > 0 && page > Math.ceil(body.totalCount / body.pageSize)) {
+            setPage(Math.ceil(body.totalCount / body.pageSize))
+          }
           setSelected((current) => current
             ? body.items.find((receipt) => receipt.id === current.id) ?? (updatedReceipt?.id === current.id ? updatedReceipt : current)
             : null)
@@ -120,6 +124,28 @@ function ReceiptArchive({ active, refreshVersion, updatedReceipt }: { active: bo
     if (key === 'year' && value === 'undated') return 'Undated'
     if (key === 'status') return statusLabel(value)
     return value
+  }
+
+  async function deleteSelected() {
+    if (!selected || deleting) return
+    const receiptName = selected.vendor || selected.fileName
+    if (!window.confirm(`Permanently delete "${receiptName}" and its stored original file? This cannot be undone.`)) return
+
+    setDeleting(true)
+    setError('')
+    try {
+      const response = await fetch(`/api/documents/${selected.id}`, { method: 'DELETE' })
+      if (!response.ok) {
+        const problem = await response.json().catch(() => null) as { detail?: string, title?: string } | null
+        throw new Error(problem?.detail ?? problem?.title ?? `Could not delete receipt (${response.status}).`)
+      }
+      setSelected(null)
+      setRetry((value) => value + 1)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not delete receipt.')
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const groups = new Map<string, Receipt[]>()
@@ -215,6 +241,9 @@ function ReceiptArchive({ active, refreshVersion, updatedReceipt }: { active: bo
             <button type="button" className="archive-icon" title="Close receipt details" aria-label="Close receipt details" onClick={() => { setSelected(null); triggerRef.current?.focus() }}><X size={18} /></button>
           </div>
           <p className="archive-file-name">{selected.fileName}</p>
+          <button type="button" className="archive-delete" disabled={deleting} onClick={() => void deleteSelected()}>
+            <Trash2 size={16} aria-hidden="true" />{deleting ? 'Deleting...' : 'Delete receipt'}
+          </button>
           {selected.status === 'Completed' && <Link className="archive-original" to={`/archive/${selected.id}/edit`}><Pencil size={16} aria-hidden="true" />Edit receipt</Link>}
           <dl className="archive-metadata">
             <div><dt>Date</dt><dd>{selected.documentDate ?? 'Not set'}</dd></div>

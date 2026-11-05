@@ -347,6 +347,74 @@ public sealed class ReceiptIngestionService(
         return new StoredReceiptFile(fullPath, contentType);
     }
 
+    public async Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var receipt = await dbContext.Receipts
+            .SingleOrDefaultAsync(item => item.Id == id, cancellationToken);
+
+        if (receipt is null)
+        {
+            return false;
+        }
+
+        var storedFileName = receipt.FilePath;
+        string? stagedFilePath = null;
+        if (TryGetStoredFilePath(storedFileName, out var storedFilePath) && File.Exists(storedFilePath))
+        {
+            stagedFilePath = Path.Combine(_storageRoot, $"{Guid.NewGuid():N}.deleting");
+            File.Move(storedFilePath, stagedFilePath);
+        }
+
+        try
+        {
+            dbContext.Receipts.Remove(receipt);
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch
+        {
+            if (stagedFilePath is not null && File.Exists(stagedFilePath))
+            {
+                try
+                {
+                    File.Move(stagedFilePath, Path.Combine(_storageRoot, storedFileName));
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    logger.LogError(exception, "Could not restore the receipt file after deleting receipt {ReceiptId} failed.", id);
+                }
+            }
+
+            throw;
+        }
+
+        if (stagedFilePath is not null)
+        {
+            File.Delete(stagedFilePath);
+        }
+
+        return true;
+    }
+
+    private bool TryGetStoredFilePath(string storedFileName, out string fullPath)
+    {
+        fullPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(storedFileName)
+            || !string.Equals(Path.GetFileName(storedFileName), storedFileName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        fullPath = Path.GetFullPath(Path.Combine(_storageRoot, storedFileName));
+        var storagePrefix = _storageRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? _storageRoot
+            : _storageRoot + Path.DirectorySeparatorChar;
+        var pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        return fullPath.StartsWith(storagePrefix, pathComparison);
+    }
+
     private static async Task<bool> HasValidSignatureAsync(
         IFormFile file,
         string extension,

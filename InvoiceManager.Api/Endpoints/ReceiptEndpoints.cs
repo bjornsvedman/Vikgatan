@@ -42,6 +42,12 @@ public static class ReceiptEndpoints
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
+        documents.MapDelete("/{id:guid}", DeleteAsync)
+            .WithName("DeleteReceipt")
+            .WithSummary("Permanently delete a receipt and its stored file")
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces(StatusCodes.Status404NotFound);
+
         documents.MapGet("/review-queue", GetReviewQueueAsync)
             .WithName("GetReceiptReviewQueue")
             .WithSummary("List receipts awaiting review")
@@ -140,6 +146,15 @@ public static class ReceiptEndpoints
         return file is null
             ? TypedResults.NotFound()
             : TypedResults.PhysicalFile(file.FullPath, file.ContentType, enableRangeProcessing: true);
+    }
+
+    private static async Task<Results<NoContent, NotFound>> DeleteAsync(
+        Guid id,
+        IReceiptIngestionService ingestionService,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await ingestionService.DeleteAsync(id, cancellationToken);
+        return deleted ? TypedResults.NoContent() : TypedResults.NotFound();
     }
 
     private static async Task<Ok<IReadOnlyList<ReceiptResponse>>> GetReviewQueueAsync(

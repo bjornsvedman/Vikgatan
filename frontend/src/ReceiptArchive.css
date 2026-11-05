@@ -46,6 +46,9 @@
 .archive-detail-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
 .archive-detail h3 { margin: 8px 0; font-size: 18px; font-weight: 550; overflow-wrap: anywhere; }
 .archive-file-name { margin: 8px 0 18px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.archive-delete { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 16px; padding: 8px 10px; color: #8b2f27; background: var(--surface); border: 1px solid #d7aaa5; border-radius: 3px; font: inherit; font-size: 12px; font-weight: 650; }
+.archive-delete:hover:not(:disabled) { background: #fbefed; border-color: #8b2f27; }
+.archive-delete:disabled { opacity: .6; }
 .archive-metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
 .archive-metadata dt { color: var(--muted); font-size: 11px; }
 .archive-metadata dd { margin: 5px 0 0; font-size: 13px; overflow-wrap: anywhere; }

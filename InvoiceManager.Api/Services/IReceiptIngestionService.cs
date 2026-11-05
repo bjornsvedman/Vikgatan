@@ -10,4 +10,6 @@ public interface IReceiptIngestionService
     Task<ReceiptResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 
     Task<StoredReceiptFile?> GetFileAsync(Guid id, CancellationToken cancellationToken);
+
+    Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken);
 }

@@ -103,6 +103,55 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task DeleteAsync_Receipt_RemovesRecordAndStoredFileAndAllowsReingestion()
+    {
+        var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\ndelete me");
+        Guid receiptId;
+        string storedFilePath;
+        using (stream)
+        {
+            var ingested = await _service.IngestAsync(file, CancellationToken.None);
+            receiptId = ingested.Receipt!.Id;
+            storedFilePath = Path.Combine(_storageRoot, receiptId.ToString("N") + ".pdf");
+
+            Assert.True(await _service.DeleteAsync(receiptId, CancellationToken.None));
+        }
+
+        Assert.False(await _dbContext.Receipts.AnyAsync(item => item.Id == receiptId));
+        Assert.False(File.Exists(storedFilePath));
+
+        var (reuploadedFile, reuploadedStream) = CreateFile("receipt.pdf", "%PDF-1.4\ndelete me");
+        using (reuploadedStream)
+        {
+            var reuploaded = await _service.IngestAsync(reuploadedFile, CancellationToken.None);
+            Assert.Equal(ReceiptIngestionStatus.Created, reuploaded.Status);
+            Assert.NotEqual(receiptId, reuploaded.Receipt!.Id);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteAsync_PathOutsideStorageRoot_DoesNotDeleteOutsideFile()
+    {
+        var outsidePath = Path.Combine(Path.GetTempPath(), $"invoice-manager-{Guid.NewGuid():N}.pdf");
+        await File.WriteAllTextAsync(outsidePath, "outside storage");
+        var receipt = CreateReceipt(ReceiptProcessingStatus.Pending, DateTimeOffset.UtcNow);
+        receipt.FilePath = Path.GetRelativePath(_storageRoot, outsidePath);
+        _dbContext.Receipts.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+
+        try
+        {
+            Assert.True(await _service.DeleteAsync(receipt.Id, CancellationToken.None));
+            Assert.False(await _dbContext.Receipts.AnyAsync(item => item.Id == receipt.Id));
+            Assert.True(File.Exists(outsidePath));
+        }
+        finally
+        {
+            File.Delete(outsidePath);
+        }
+    }
+
+    [Fact]
     public async Task IngestAsync_SameContentTwice_ReturnsExistingReceipt()
     {
         var (firstFile, firstStream) = CreateFile("first.pdf", "%PDF-1.4\nidentical");
