@@ -2,6 +2,7 @@ namespace InvoiceManager.Api.Contracts;
 
 /// <summary>Filters and ordering for a year-grouped receipt archive page.</summary>
 public sealed record ReceiptArchiveRequest(
+    Guid PropertyId,
     int? Year = null,
     bool Undated = false,
     DateOnly? DateFrom = null,

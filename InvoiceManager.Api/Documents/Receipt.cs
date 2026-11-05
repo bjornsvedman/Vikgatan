@@ -6,6 +6,10 @@ public sealed class Receipt
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
+    public Guid PropertyId { get; set; }
+
+    public Property Property { get; set; } = null!;
+
     public string FileName { get; set; } = string.Empty;
 
     public string FilePath { get; set; } = string.Empty;

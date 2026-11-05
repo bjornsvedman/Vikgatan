@@ -52,7 +52,8 @@ public static class ReceiptEndpoints
             .WithName("GetReceiptReviewQueue")
             .WithSummary("List receipts awaiting review")
             .WithDescription("Returns pending and partially reviewed receipts, oldest first.")
-            .Produces<IReadOnlyList<ReceiptResponse>>(StatusCodes.Status200OK);
+            .Produces<IReadOnlyList<ReceiptResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest);
 
         documents.MapPut("/{id:guid}/review", ReviewAsync)
             .WithName("ReviewReceipt")
@@ -92,6 +93,7 @@ public static class ReceiptEndpoints
 
     private static async Task<Results<Created<ReceiptResponse>, Conflict<ReceiptResponse>, ProblemHttpResult>> IngestAsync(
         IFormFile? file,
+        [FromQuery] Guid propertyId,
         IReceiptIngestionService ingestionService,
         CancellationToken cancellationToken)
     {
@@ -103,7 +105,7 @@ public static class ReceiptEndpoints
                 detail: "Submit one supported receipt as the 'file' form field.");
         }
 
-        var result = await ingestionService.IngestAsync(file, cancellationToken);
+        var result = await ingestionService.IngestAsync(file, cancellationToken, propertyId);
 
         return result.Status switch
         {
@@ -124,6 +126,9 @@ public static class ReceiptEndpoints
             ReceiptIngestionStatus.InvalidFileContents => TypedResults.Problem(
                 statusCode: StatusCodes.Status415UnsupportedMediaType,
                 title: "The file contents do not match the declared extension."),
+            ReceiptIngestionStatus.InvalidProperty => TypedResults.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "The selected property does not exist."),
             _ => TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError)
         };
     }
@@ -157,10 +162,18 @@ public static class ReceiptEndpoints
         return deleted ? TypedResults.NoContent() : TypedResults.NotFound();
     }
 
-    private static async Task<Ok<IReadOnlyList<ReceiptResponse>>> GetReviewQueueAsync(
+    private static async Task<Results<Ok<IReadOnlyList<ReceiptResponse>>, ProblemHttpResult>> GetReviewQueueAsync(
+        [FromQuery] Guid propertyId,
         IReceiptReviewService reviewService,
-        CancellationToken cancellationToken) =>
-        TypedResults.Ok(await reviewService.GetReviewQueueAsync(cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        if (propertyId == Guid.Empty)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest,
+                title: "A non-empty propertyId is required.");
+        }
+        return TypedResults.Ok(await reviewService.GetReviewQueueAsync(cancellationToken, propertyId));
+    }
 
     private static async Task<Results<Ok<ReceiptResponse>, NotFound, ProblemHttpResult>> ReviewAsync(
         Guid id,
@@ -184,9 +197,16 @@ public static class ReceiptEndpoints
 
     private static async Task<Results<Ok<ReceiptQuestionResponse>, ProblemHttpResult>> QueryAsync(
         ReceiptQuestionRequest request,
+        [FromQuery] Guid propertyId,
         IReceiptQuestionService questionService,
         CancellationToken cancellationToken)
     {
+        if (propertyId == Guid.Empty)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest,
+                title: "A non-empty propertyId is required.");
+        }
+
         if (string.IsNullOrWhiteSpace(request.Question) || request.Question.Length > 2000)
         {
             return TypedResults.Problem(
@@ -194,7 +214,7 @@ public static class ReceiptEndpoints
                 title: "A question between 1 and 2000 characters is required.");
         }
 
-        var result = await questionService.QueryAsync(request.Question, cancellationToken);
+        var result = await questionService.QueryAsync(request.Question, cancellationToken, propertyId);
         return TypedResults.Ok(result);
     }
 }

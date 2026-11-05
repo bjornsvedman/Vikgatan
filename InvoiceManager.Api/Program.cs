@@ -45,6 +45,7 @@ builder.Services.AddDbContext<InvoiceDbContext>(options =>
 builder.Services.AddScoped<IReceiptIngestionService, ReceiptIngestionService>();
 builder.Services.AddScoped<IReceiptReviewService, ReceiptReviewService>();
 builder.Services.AddScoped<ReceiptArchiveService>();
+builder.Services.AddScoped<PropertyService>();
 builder.Services.AddScoped<IReceiptQuestionService, ReceiptQuestionService>();
 
 var app = builder.Build();
@@ -70,5 +71,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapReceiptEndpoints();
+app.MapPropertyEndpoints();
 
 app.Run();

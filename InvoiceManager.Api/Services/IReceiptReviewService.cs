@@ -4,7 +4,9 @@ namespace InvoiceManager.Api.Services;
 
 public interface IReceiptReviewService
 {
-    Task<IReadOnlyList<ReceiptResponse>> GetReviewQueueAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<ReceiptResponse>> GetReviewQueueAsync(
+        CancellationToken cancellationToken,
+        Guid propertyId);
 
     Task<ReceiptReviewResult> ReviewAsync(
         Guid id,

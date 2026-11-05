@@ -5,7 +5,10 @@ namespace InvoiceManager.Api.Services;
 
 public interface IReceiptIngestionService
 {
-    Task<ReceiptIngestionResult> IngestAsync(IFormFile file, CancellationToken cancellationToken);
+    Task<ReceiptIngestionResult> IngestAsync(
+        IFormFile file,
+        CancellationToken cancellationToken,
+        Guid propertyId);
 
     Task<ReceiptResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 

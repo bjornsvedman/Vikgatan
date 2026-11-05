@@ -39,7 +39,12 @@ function statusLabel(status: string) {
   return status === 'Completed' ? 'Reviewed' : status === 'NeedsReview' ? 'Needs review' : status
 }
 
-function ReceiptArchive({ active, refreshVersion, updatedReceipt }: { active: boolean, refreshVersion: number, updatedReceipt: Receipt | null }) {
+function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: {
+  active: boolean
+  propertyId: string
+  refreshVersion: number
+  updatedReceipt: Receipt | null
+}) {
   const [filters, setFilters] = useState<Filters>(emptyFilters)
   const [applied, setApplied] = useState<Filters>(emptyFilters)
   const [sortBy, setSortBy] = useState('date')
@@ -60,6 +65,7 @@ function ReceiptArchive({ active, refreshVersion, updatedReceipt }: { active: bo
   }, [active, selectedId])
 
   const parameters = new URLSearchParams({ sortBy, direction, page: String(page), pageSize: '25' })
+  if (propertyId) parameters.set('propertyId', propertyId)
   if (applied.year === 'undated') parameters.set('undated', 'true')
   else if (applied.year) parameters.set('year', applied.year)
   if (applied.category === 'uncategorized') parameters.set('uncategorized', 'true')
@@ -70,7 +76,7 @@ function ReceiptArchive({ active, refreshVersion, updatedReceipt }: { active: bo
   const query = parameters.toString()
 
   useEffect(() => {
-    if (!active) return
+    if (!active || !propertyId) return
     const controller = new AbortController()
     async function load() {
       setPending(true)
@@ -99,7 +105,7 @@ function ReceiptArchive({ active, refreshVersion, updatedReceipt }: { active: bo
     }
     void load()
     return () => controller.abort()
-  }, [active, query, refreshVersion, retry, updatedReceipt])
+  }, [active, propertyId, query, refreshVersion, retry, updatedReceipt])
 
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

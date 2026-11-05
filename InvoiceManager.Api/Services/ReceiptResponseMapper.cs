@@ -7,6 +7,7 @@ internal static class ReceiptResponseMapper
 {
     public static ReceiptResponse ToResponse(Receipt receipt) => new(
         receipt.Id,
+        receipt.PropertyId,
         receipt.FileName,
         receipt.DocumentDate,
         receipt.Vendor,

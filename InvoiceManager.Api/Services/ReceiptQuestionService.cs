@@ -37,8 +37,14 @@ public sealed class ReceiptQuestionService(
 
     public async Task<ReceiptQuestionResponse> QueryAsync(
         string question,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid propertyId)
     {
+        if (propertyId == Guid.Empty)
+        {
+            throw new ArgumentException("A non-empty propertyId is required.", nameof(propertyId));
+        }
+
         var normalizedQuestion = question.Trim();
         if (normalizedQuestion.Length is 0 or > MaximumQuestionLength)
         {
@@ -49,7 +55,7 @@ public sealed class ReceiptQuestionService(
 
         var hasReceipts = await dbContext.Receipts
             .AsNoTracking()
-            .AnyAsync(cancellationToken);
+            .AnyAsync(receipt => receipt.PropertyId == propertyId, cancellationToken);
         if (!hasReceipts)
         {
             return new("There are no receipts available to answer this question yet.", []);
@@ -70,10 +76,10 @@ public sealed class ReceiptQuestionService(
 
         if (plan.QueryType == "sum_total" || (!isReceiptLookup && TotalQuestionPattern.IsMatch(normalizedQuestion)))
         {
-            return await AnswerTotalAsync(plan with { QueryType = "sum_total" }, cancellationToken);
+            return await AnswerTotalAsync(plan with { QueryType = "sum_total" }, cancellationToken, propertyId);
         }
 
-        var documents = await FindContextAsync(normalizedQuestion, cancellationToken);
+        var documents = await FindContextAsync(normalizedQuestion, cancellationToken, propertyId);
         if (documents.Count == 0)
         {
             return new("There are no receipts available to answer this question yet.", []);
@@ -120,7 +126,8 @@ public sealed class ReceiptQuestionService(
 
     private async Task<ReceiptQuestionResponse> AnswerTotalAsync(
         ReceiptQueryPlan plan,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid propertyId)
     {
         await using var snapshot = dbContext.Database.CurrentTransaction is null
             ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
@@ -128,7 +135,8 @@ public sealed class ReceiptQuestionService(
         var query = dbContext.Receipts
             .AsNoTracking()
             .Where(receipt => receipt.ProcessingStatus == ReceiptProcessingStatus.Completed
-                && receipt.TotalAmount != null);
+                && receipt.TotalAmount != null
+                && receipt.PropertyId == propertyId);
 
         var vendor = plan.Vendor?.Trim();
         if (!string.IsNullOrWhiteSpace(vendor))
@@ -281,12 +289,14 @@ public sealed class ReceiptQuestionService(
 
     private async Task<IReadOnlyList<ReceiptQuestionDocument>> FindContextAsync(
         string question,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid propertyId)
     {
         var documents = new List<Receipt>();
         var hasEmbeddings = await dbContext.Receipts
             .AsNoTracking()
-            .AnyAsync(receipt => receipt.Embedding != null, cancellationToken);
+            .AnyAsync(receipt => receipt.Embedding != null
+                && receipt.PropertyId == propertyId, cancellationToken);
 
         if (hasEmbeddings)
         {
@@ -301,7 +311,8 @@ public sealed class ReceiptQuestionService(
             var semanticMatches = await dbContext.Receipts
                 .AsNoTracking()
                 .Include(receipt => receipt.LineItems)
-                .Where(receipt => receipt.Embedding != null)
+                .Where(receipt => receipt.Embedding != null
+                    && receipt.PropertyId == propertyId)
                 .OrderBy(receipt => receipt.Embedding!.CosineDistance(queryVector))
                 .ThenByDescending(receipt => receipt.CreatedAtUtc)
                 .Take(MaximumSemanticMatches)
@@ -317,7 +328,8 @@ public sealed class ReceiptQuestionService(
             var remainingDocuments = await dbContext.Receipts
                 .AsNoTracking()
                 .Include(receipt => receipt.LineItems)
-                .Where(receipt => !includedIds.Contains(receipt.Id))
+                .Where(receipt => !includedIds.Contains(receipt.Id)
+                    && receipt.PropertyId == propertyId)
                 .OrderByDescending(receipt => receipt.CreatedAtUtc)
                 .Take(remainingSlots)
                 .ToListAsync(cancellationToken);

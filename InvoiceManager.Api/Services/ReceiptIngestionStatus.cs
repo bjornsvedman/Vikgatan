@@ -7,5 +7,6 @@ public enum ReceiptIngestionStatus
     EmptyFile,
     FileTooLarge,
     UnsupportedFileType,
-    InvalidFileContents
+    InvalidFileContents,
+    InvalidProperty
 }

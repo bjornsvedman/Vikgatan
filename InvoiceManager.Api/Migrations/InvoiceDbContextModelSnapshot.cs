@@ -24,6 +24,32 @@ namespace InvoiceManager.Api.Migrations
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "vector");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("InvoiceManager.Api.Documents.Property", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IsDefault")
+                        .IsUnique()
+                        .HasFilter("\"IsDefault\" = TRUE");
+
+                    b.ToTable("Properties");
+                });
+
             modelBuilder.Entity("InvoiceManager.Api.Documents.Receipt", b =>
                 {
                     b.Property<Guid>("Id")
@@ -88,6 +114,9 @@ namespace InvoiceManager.Api.Migrations
                         .HasMaxLength(24)
                         .HasColumnType("character varying(24)");
 
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
                     b.Property<decimal?>("TotalAmount")
                         .HasPrecision(18, 4)
                         .HasColumnType("numeric(18,4)");
@@ -103,12 +132,12 @@ namespace InvoiceManager.Api.Migrations
 
                     b.HasIndex("Category");
 
-                    b.HasIndex("ContentHash")
-                        .IsUnique();
-
                     b.HasIndex("ProcessingStatus");
 
                     b.HasIndex("DocumentDate", "Vendor");
+
+                    b.HasIndex("PropertyId", "ContentHash")
+                        .IsUnique();
 
                     b.ToTable("Receipts");
                 });
@@ -150,6 +179,17 @@ namespace InvoiceManager.Api.Migrations
                     b.ToTable("ReceiptLineItems");
                 });
 
+            modelBuilder.Entity("InvoiceManager.Api.Documents.Receipt", b =>
+                {
+                    b.HasOne("InvoiceManager.Api.Documents.Property", "Property")
+                        .WithMany("Receipts")
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Property");
+                });
+
             modelBuilder.Entity("InvoiceManager.Api.Documents.ReceiptLineItem", b =>
                 {
                     b.HasOne("InvoiceManager.Api.Documents.Receipt", "Receipt")
@@ -159,6 +199,11 @@ namespace InvoiceManager.Api.Migrations
                         .IsRequired();
 
                     b.Navigation("Receipt");
+                });
+
+            modelBuilder.Entity("InvoiceManager.Api.Documents.Property", b =>
+                {
+                    b.Navigation("Receipts");
                 });
 
             modelBuilder.Entity("InvoiceManager.Api.Documents.Receipt", b =>

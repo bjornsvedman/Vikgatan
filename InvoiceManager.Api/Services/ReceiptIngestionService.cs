@@ -39,8 +39,15 @@ public sealed class ReceiptIngestionService(
 
     public async Task<ReceiptIngestionResult> IngestAsync(
         IFormFile file,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid propertyId)
     {
+        var property = await dbContext.Properties.SingleOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        if (property is null)
+        {
+            return new(ReceiptIngestionStatus.InvalidProperty, null);
+        }
+
         if (file.Length == 0)
         {
             return new(ReceiptIngestionStatus.EmptyFile, null);
@@ -69,7 +76,9 @@ public sealed class ReceiptIngestionService(
         var existingReceipt = await dbContext.Receipts
             .AsNoTracking()
             .Include(receipt => receipt.LineItems)
-            .SingleOrDefaultAsync(receipt => receipt.ContentHash == contentHash, cancellationToken);
+            .SingleOrDefaultAsync(
+                receipt => receipt.PropertyId == property.Id && receipt.ContentHash == contentHash,
+                cancellationToken);
 
         if (existingReceipt is not null)
         {
@@ -85,6 +94,7 @@ public sealed class ReceiptIngestionService(
         var receipt = new Receipt
         {
             Id = id,
+            PropertyId = property.Id,
             FileName = NormalizeFileName(file.FileName, extension),
             FilePath = storedFileName,
             ContentHash = contentHash,
@@ -117,7 +127,9 @@ public sealed class ReceiptIngestionService(
             var concurrentDuplicate = await dbContext.Receipts
                 .AsNoTracking()
                 .Include(item => item.LineItems)
-                .SingleOrDefaultAsync(item => item.ContentHash == contentHash, cancellationToken);
+                .SingleOrDefaultAsync(
+                    item => item.PropertyId == property.Id && item.ContentHash == contentHash,
+                    cancellationToken);
 
             if (concurrentDuplicate is null)
             {
@@ -474,7 +486,7 @@ public sealed class ReceiptIngestionService(
         exception.InnerException is PostgresException
         {
             SqlState: PostgresErrorCodes.UniqueViolation,
-            ConstraintName: "IX_Receipts_ContentHash"
+            ConstraintName: "IX_Receipts_PropertyId_ContentHash"
         };
 
     private static ReceiptIngestionResult Duplicate(Receipt receipt) =>

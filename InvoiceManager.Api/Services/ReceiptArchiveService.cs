@@ -11,6 +11,11 @@ public sealed class ReceiptArchiveService(InvoiceDbContext dbContext)
         ReceiptArchiveRequest request,
         CancellationToken cancellationToken)
     {
+        if (request.PropertyId == Guid.Empty)
+        {
+            throw new ArgumentException("A non-empty propertyId is required.", nameof(request));
+        }
+
         if (request.Page is < 1 or > 1000000 || request.PageSize is < 1 or > 100
             || request.Year is < 1 or > 9999
             || request.SortBy is not ("date" or "category" or "vendor" or "amount")
@@ -23,7 +28,8 @@ public sealed class ReceiptArchiveService(InvoiceDbContext dbContext)
             throw new ArgumentException("Archive filters, sort order, date range, or page are invalid.");
         }
 
-        var all = dbContext.Receipts.AsNoTracking();
+        var all = dbContext.Receipts.AsNoTracking()
+            .Where(receipt => receipt.PropertyId == request.PropertyId);
         var query = all;
         if (!string.IsNullOrWhiteSpace(request.Status))
         {

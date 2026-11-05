@@ -18,6 +18,7 @@ type ReceiptLineItem = {
 
 export type Receipt = {
   id: string
+  propertyId: string
   fileName: string
   documentDate: string | null
   vendor: string | null
@@ -30,6 +31,12 @@ export type Receipt = {
   createdAtUtc: string
   updatedAtUtc: string
   lineItems: ReceiptLineItem[]
+}
+
+type PropertyWorkspace = {
+  id: string
+  name: string
+  isDefault: boolean
 }
 
 type ReceiptCitation = {
@@ -126,6 +133,8 @@ function ReviewDesk() {
   const [archiveVersion, setArchiveVersion] = useState(0)
   const [lastSavedReceipt, setLastSavedReceipt] = useState<Receipt | null>(null)
   const [receipts, setReceipts] = useState<Receipt[]>([])
+  const [properties, setProperties] = useState<PropertyWorkspace[]>([])
+  const [selectedPropertyId, setSelectedPropertyId] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [reviewDraft, setReviewDraft] = useState<ReviewDraft | null>(null)
   const [editDraft, setEditDraft] = useState<ReviewDraft | null>(null)
@@ -165,7 +174,16 @@ function ReviewDesk() {
         if (!active) return
         setRequestToken(tokenBody.requestToken)
 
-        const queueResponse = await fetch('/api/documents/review-queue')
+        const propertiesResponse = await fetch('/api/properties/')
+        if (!propertiesResponse.ok) throw await responseError(propertiesResponse)
+        const availableProperties = await propertiesResponse.json() as PropertyWorkspace[]
+        if (!active) return
+        setProperties(availableProperties)
+        const defaultProperty = availableProperties.find((property) => property.isDefault) ?? availableProperties[0]
+        if (!defaultProperty) throw new Error('Create a property workspace before adding receipts.')
+        setSelectedPropertyId(defaultProperty.id)
+
+        const queueResponse = await fetch(`/api/documents/review-queue?propertyId=${encodeURIComponent(defaultProperty.id)}`)
         if (!queueResponse.ok) throw await responseError(queueResponse)
         const queue = (await queueResponse.json()) as Receipt[]
         if (!active) return
@@ -219,8 +237,8 @@ function ReviewDesk() {
     ? editReceipt?.id === editId ? editReceipt : null
     : receipts.find((receipt) => receipt.id === selectedId) ?? null
 
-  async function refreshQueue(focusId?: string) {
-    const response = await fetch('/api/documents/review-queue')
+  async function refreshQueue(focusId?: string, propertyId = selectedPropertyId) {
+    const response = await fetch(`/api/documents/review-queue?propertyId=${encodeURIComponent(propertyId)}`)
     if (!response.ok) throw await responseError(response)
     const queue = (await response.json()) as Receipt[]
     setReceipts(queue)
@@ -235,6 +253,45 @@ function ReviewDesk() {
     } else {
       setSelectedId(null)
       setReviewDraft(null)
+    }
+  }
+
+  async function selectProperty(propertyId: string) {
+    if (!propertyId || propertyId === selectedPropertyId) return
+    setError('')
+    setNotice('')
+    try {
+      const response = await fetch(`/api/properties/${encodeURIComponent(propertyId)}/default`, { method: 'PUT' })
+      if (!response.ok) throw await responseError(response)
+      setSelectedPropertyId(propertyId)
+      setProperties((current) => current.map((property) => ({ ...property, isDefault: property.id === propertyId })))
+      setReceipts([])
+      setSelectedId(null)
+      setReviewDraft(null)
+      setQuestionResponse(null)
+      setFolderImport(null)
+      await refreshQueue(undefined, propertyId)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not change the selected property.')
+    }
+  }
+
+  async function createProperty() {
+    const name = window.prompt('Name this property workspace')
+    if (!name?.trim()) return
+    setError('')
+    try {
+      const response = await fetch('/api/properties/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      })
+      if (!response.ok) throw await responseError(response)
+      const property = await response.json() as PropertyWorkspace
+      setProperties((current) => [...current, property])
+      await selectProperty(property.id)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not create the property.')
     }
   }
 
@@ -256,7 +313,7 @@ function ReviewDesk() {
     try {
       const form = new FormData()
       form.append('file', file)
-      const response = await fetch('/api/documents/ingest', {
+      const response = await fetch(`/api/documents/ingest?propertyId=${encodeURIComponent(selectedPropertyId)}`, {
         method: 'POST',
         headers: { 'X-CSRF-TOKEN': requestToken },
         body: form,
@@ -325,7 +382,7 @@ function ReviewDesk() {
         try {
           const form = new FormData()
           form.append('file', file)
-          const response = await fetch('/api/documents/ingest', {
+          const response = await fetch(`/api/documents/ingest?propertyId=${encodeURIComponent(selectedPropertyId)}`, {
             method: 'POST',
             headers: { 'X-CSRF-TOKEN': requestToken },
             body: form,
@@ -488,7 +545,7 @@ function ReviewDesk() {
     setError('')
     setQuestionResponse(null)
     try {
-      const response = await fetch('/api/documents/query', {
+      const response = await fetch(`/api/documents/query?propertyId=${encodeURIComponent(selectedPropertyId)}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -516,6 +573,25 @@ function ReviewDesk() {
           <span>Renovation archive</span>
         </Link>
         <div className="topbar-meta">
+          <label className="property-selector">
+            <span className="sr-only">Default property</span>
+            <select
+              aria-label="Default property"
+              onChange={(event) => void selectProperty(event.target.value)}
+              value={selectedPropertyId}
+              disabled={properties.length === 0 || uploading}
+            >
+              {properties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}
+            </select>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => void createProperty()}
+              disabled={loading || uploading}
+            >
+              Add property
+            </button>
+          </label>
           <span className="local-indicator"><span />Local workspace</span>
           <label className={`upload-button${uploading ? ' is-busy' : ''}`}>
             <span>{uploading ? 'Uploading…' : 'Upload receipt'}</span>
@@ -523,7 +599,7 @@ function ReviewDesk() {
               type="file"
               accept=".pdf,.jpg,.jpeg,.png,.webp"
               onChange={(event) => void uploadReceipt(event)}
-              disabled={uploading || !requestToken}
+              disabled={uploading || !requestToken || !selectedPropertyId}
             />
           </label>
         </div>
@@ -550,7 +626,7 @@ function ReviewDesk() {
                 type="file"
                 multiple
                 onChange={(event) => void importFolder(event)}
-                disabled={uploading || !requestToken}
+                disabled={uploading || !requestToken || !selectedPropertyId}
                 aria-label="Select a folder to import receipts from"
               />
             </label>
@@ -606,7 +682,7 @@ function ReviewDesk() {
                 value={question}
               />
             </label>
-            <button className="button-primary question-button" disabled={asking || !requestToken || !question.trim()} type="submit">
+            <button className="button-primary question-button" disabled={asking || !requestToken || !selectedPropertyId || !question.trim()} type="submit">
               <Search size={17} aria-hidden="true" />
               {asking ? 'Searching…' : 'Ask'}
             </button>
@@ -639,7 +715,13 @@ function ReviewDesk() {
           )}
         </section>
 
-        <ReceiptArchive active={view === 'archive'} refreshVersion={archiveVersion} updatedReceipt={lastSavedReceipt} />
+        <ReceiptArchive
+          active={view === 'archive'}
+          key={selectedPropertyId}
+          propertyId={selectedPropertyId}
+          refreshVersion={archiveVersion}
+          updatedReceipt={lastSavedReceipt}
+        />
 
         {view === 'not-found' && <Link className="text-button" to="/">Back to questions</Link>}
 

@@ -60,7 +60,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\nreceipt");
         using (stream)
         {
-            var result = await _service.IngestAsync(file, CancellationToken.None);
+            var result = await _service.IngestAsync(file, CancellationToken.None, Property.DefaultPropertyId);
 
             Assert.Equal(ReceiptIngestionStatus.Created, result.Status);
             Assert.NotNull(result.Receipt);
@@ -80,7 +80,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\nreceipt");
         using (stream)
         {
-            var ingested = await _service.IngestAsync(file, CancellationToken.None);
+            var ingested = await _service.IngestAsync(file, CancellationToken.None, Property.DefaultPropertyId);
             var storedFile = await _service.GetFileAsync(ingested.Receipt!.Id, CancellationToken.None);
 
             Assert.NotNull(storedFile);
@@ -110,7 +110,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         string storedFilePath;
         using (stream)
         {
-            var ingested = await _service.IngestAsync(file, CancellationToken.None);
+            var ingested = await _service.IngestAsync(file, CancellationToken.None, Property.DefaultPropertyId);
             receiptId = ingested.Receipt!.Id;
             storedFilePath = Path.Combine(_storageRoot, receiptId.ToString("N") + ".pdf");
 
@@ -123,7 +123,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         var (reuploadedFile, reuploadedStream) = CreateFile("receipt.pdf", "%PDF-1.4\ndelete me");
         using (reuploadedStream)
         {
-            var reuploaded = await _service.IngestAsync(reuploadedFile, CancellationToken.None);
+            var reuploaded = await _service.IngestAsync(reuploadedFile, CancellationToken.None, Property.DefaultPropertyId);
             Assert.Equal(ReceiptIngestionStatus.Created, reuploaded.Status);
             Assert.NotEqual(receiptId, reuploaded.Receipt!.Id);
         }
@@ -159,8 +159,8 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         using (firstStream)
         using (secondStream)
         {
-            var first = await _service.IngestAsync(firstFile, CancellationToken.None);
-            var second = await _service.IngestAsync(secondFile, CancellationToken.None);
+            var first = await _service.IngestAsync(firstFile, CancellationToken.None, Property.DefaultPropertyId);
+            var second = await _service.IngestAsync(secondFile, CancellationToken.None, Property.DefaultPropertyId);
 
             Assert.Equal(ReceiptIngestionStatus.Created, first.Status);
             Assert.Equal(ReceiptIngestionStatus.Duplicate, second.Status);
@@ -171,12 +171,57 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task IngestAsync_EmptyPropertyId_RejectsWithoutUsingDefaultOrWriting()
+    {
+        var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\nsynthetic");
+        using (stream)
+        {
+            var result = await _service.IngestAsync(file, CancellationToken.None, Guid.Empty);
+            Assert.Equal(ReceiptIngestionStatus.InvalidProperty, result.Status);
+            Assert.Empty(await _dbContext.Receipts.ToListAsync());
+            Assert.False(Directory.Exists(_storageRoot));
+        }
+    }
+
+    [Fact]
+    public async Task GetReviewQueueAsync_EmptyPropertyId_IsRejected()
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _reviewService.GetReviewQueueAsync(CancellationToken.None, Guid.Empty));
+    }
+
+    [Fact]
+    public async Task IngestAsync_SameContentForDifferentProperties_CreatesSeparateReceipts()
+    {
+        var otherProperty = new Property { Name = "Vacation home" };
+        _dbContext.Properties.Add(otherProperty);
+        await _dbContext.SaveChangesAsync();
+
+        var (mainFile, mainStream) = CreateFile("receipt.pdf", "%PDF-1.4\nidentical");
+        var (otherFile, otherStream) = CreateFile("receipt.pdf", "%PDF-1.4\nidentical");
+        using (mainStream)
+        using (otherStream)
+        {
+            var mainPropertyReceipt = await _service.IngestAsync(mainFile, CancellationToken.None, Property.DefaultPropertyId);
+            var otherPropertyReceipt = await _service.IngestAsync(
+                otherFile,
+                CancellationToken.None,
+                otherProperty.Id);
+
+            Assert.Equal(ReceiptIngestionStatus.Created, mainPropertyReceipt.Status);
+            Assert.Equal(ReceiptIngestionStatus.Created, otherPropertyReceipt.Status);
+            Assert.NotEqual(mainPropertyReceipt.Receipt!.Id, otherPropertyReceipt.Receipt!.Id);
+            Assert.Equal(2, await _dbContext.Receipts.CountAsync());
+        }
+    }
+
+    [Fact]
     public async Task IngestAsync_UnsupportedExtension_RejectsWithoutWriting()
     {
         var (file, stream) = CreateFile("receipt.txt", "%PDF-1.4\nreceipt");
         using (stream)
         {
-            var result = await _service.IngestAsync(file, CancellationToken.None);
+            var result = await _service.IngestAsync(file, CancellationToken.None, Property.DefaultPropertyId);
 
             Assert.Equal(ReceiptIngestionStatus.UnsupportedFileType, result.Status);
             Assert.Empty(await _dbContext.Receipts.ToListAsync());
@@ -190,7 +235,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         var (file, stream) = CreateFile("receipt.pdf", "not a PDF");
         using (stream)
         {
-            var result = await _service.IngestAsync(file, CancellationToken.None);
+            var result = await _service.IngestAsync(file, CancellationToken.None, Property.DefaultPropertyId);
 
             Assert.Equal(ReceiptIngestionStatus.InvalidFileContents, result.Status);
             Assert.Empty(await _dbContext.Receipts.ToListAsync());
@@ -204,7 +249,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         using var stream = new MemoryStream();
         var file = new FormFile(stream, 0, 0, "file", "receipt.pdf");
 
-        var result = await _service.IngestAsync(file, CancellationToken.None);
+        var result = await _service.IngestAsync(file, CancellationToken.None, Property.DefaultPropertyId);
 
         Assert.Equal(ReceiptIngestionStatus.EmptyFile, result.Status);
         Assert.Empty(await _dbContext.Receipts.ToListAsync());
@@ -218,7 +263,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
             new byte[checked((int)DocumentStorageOptions.MaximumFileBytes + 1)]);
         var file = new FormFile(stream, 0, stream.Length, "file", "receipt.pdf");
 
-        var result = await _service.IngestAsync(file, CancellationToken.None);
+        var result = await _service.IngestAsync(file, CancellationToken.None, Property.DefaultPropertyId);
 
         Assert.Equal(ReceiptIngestionStatus.FileTooLarge, result.Status);
         Assert.Empty(await _dbContext.Receipts.ToListAsync());
@@ -242,7 +287,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\nreceipt");
         using (stream)
         {
-            var result = await service.IngestAsync(file, CancellationToken.None);
+            var result = await service.IngestAsync(file, CancellationToken.None, Property.DefaultPropertyId);
 
             Assert.Equal(ReceiptIngestionStatus.Created, result.Status);
             Assert.Equal(ReceiptProcessingStatus.NeedsReview, result.Receipt!.Status);
@@ -268,7 +313,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\nreceipt");
         using (stream)
         {
-            var result = await service.IngestAsync(file, CancellationToken.None);
+            var result = await service.IngestAsync(file, CancellationToken.None, Property.DefaultPropertyId);
 
             Assert.Equal(ReceiptIngestionStatus.Created, result.Status);
             Assert.Equal(ReceiptProcessingStatus.Failed, result.Receipt!.Status);
@@ -287,7 +332,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         _dbContext.Receipts.AddRange(oldest, newest, completed);
         await _dbContext.SaveChangesAsync();
 
-        var queue = await _reviewService.GetReviewQueueAsync(CancellationToken.None);
+        var queue = await _reviewService.GetReviewQueueAsync(CancellationToken.None, Property.DefaultPropertyId);
 
         Assert.Equal([oldest.Id, newest.Id], queue.Select(receipt => receipt.Id));
     }
@@ -367,8 +412,8 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
         _dbContext.ChangeTracker.Clear();
         var saved = await _dbContext.Receipts.SingleAsync(item => item.Id == receipt.Id);
         var archive = new ReceiptArchiveService(_dbContext);
-        var oldCategory = await archive.BrowseAsync(new(Category: "Paint"), CancellationToken.None);
-        var newCategory = await archive.BrowseAsync(new(Category: "Flooring"), CancellationToken.None);
+        var oldCategory = await archive.BrowseAsync(new(Property.DefaultPropertyId, Category: "Paint"), CancellationToken.None);
+        var newCategory = await archive.BrowseAsync(new(Property.DefaultPropertyId, Category: "Flooring"), CancellationToken.None);
         var total = await _dbContext.Receipts.Where(item => item.Category == "Flooring"
             && item.ProcessingStatus == ReceiptProcessingStatus.Completed).SumAsync(item => item.TotalAmount);
 
@@ -514,6 +559,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
 
     private static Receipt CreateReceipt(ReceiptProcessingStatus status, DateTimeOffset createdAt) => new()
     {
+        PropertyId = Property.DefaultPropertyId,
         FileName = "receipt.pdf",
         FilePath = $"{Guid.NewGuid():N}.pdf",
         ContentHash = $"{Guid.NewGuid():N}{Guid.NewGuid():N}",

@@ -42,7 +42,7 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
         _dbContext.AddRange(older, paint, flooring, undated);
         await _dbContext.SaveChangesAsync();
 
-        var result = await _service.BrowseAsync(new(SortBy: "category", Direction: direction), CancellationToken.None);
+        var result = await _service.BrowseAsync(new(Property.DefaultPropertyId, SortBy: "category", Direction: direction), CancellationToken.None);
 
         var expected = direction == "asc"
             ? new[] { flooring.Id, paint.Id, older.Id, undated.Id }
@@ -69,7 +69,7 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
         _dbContext.AddRange(match, otherCategory, otherDate, otherStatus, otherCurrency, otherVendor);
         await _dbContext.SaveChangesAsync();
 
-        var result = await _service.BrowseAsync(new(Year: 2024,
+        var result = await _service.BrowseAsync(new(Property.DefaultPropertyId, Year: 2024,
             DateFrom: new DateOnly(2024, 5, 1), DateTo: new DateOnly(2024, 5, 31),
             Category: "flooring", Vendor: "tile house", Currency: "sek", Status: "Completed"), CancellationToken.None);
 
@@ -87,7 +87,7 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
         _dbContext.AddRange(undated, CreateReceipt(new DateOnly(2024, 5, 1), "Paint"));
         await _dbContext.SaveChangesAsync();
 
-        var result = await _service.BrowseAsync(new(Undated: true, Uncategorized: true), CancellationToken.None);
+        var result = await _service.BrowseAsync(new(Property.DefaultPropertyId, Undated: true, Uncategorized: true), CancellationToken.None);
 
         Assert.Equal(undated.Id, Assert.Single(result.Items).Id);
     }
@@ -98,10 +98,10 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
         _dbContext.AddRange(Enumerable.Range(0, 5).Select(index => CreateReceipt(new DateOnly(2024, 5, 1), "Paint")));
         await _dbContext.SaveChangesAsync();
 
-        var first = await _service.BrowseAsync(new(PageSize: 2), CancellationToken.None);
-        var second = await _service.BrowseAsync(new(Page: 2, PageSize: 2), CancellationToken.None);
-        var repeated = await _service.BrowseAsync(new(Page: 2, PageSize: 2), CancellationToken.None);
-        var empty = await _service.BrowseAsync(new(Page: 4, PageSize: 2), CancellationToken.None);
+        var first = await _service.BrowseAsync(new(Property.DefaultPropertyId, PageSize: 2), CancellationToken.None);
+        var second = await _service.BrowseAsync(new(Property.DefaultPropertyId, Page: 2, PageSize: 2), CancellationToken.None);
+        var repeated = await _service.BrowseAsync(new(Property.DefaultPropertyId, Page: 2, PageSize: 2), CancellationToken.None);
+        var empty = await _service.BrowseAsync(new(Property.DefaultPropertyId, Page: 4, PageSize: 2), CancellationToken.None);
 
         Assert.Equal(5, first.TotalCount);
         Assert.Equal(2, second.Items.Count);
@@ -125,8 +125,8 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
         _dbContext.AddRange(lower, higher);
         await _dbContext.SaveChangesAsync();
 
-        var ascending = await _service.BrowseAsync(new(SortBy: sortBy, Direction: "asc"), CancellationToken.None);
-        var descending = await _service.BrowseAsync(new(SortBy: sortBy, Direction: "desc"), CancellationToken.None);
+        var ascending = await _service.BrowseAsync(new(Property.DefaultPropertyId, SortBy: sortBy, Direction: "asc"), CancellationToken.None);
+        var descending = await _service.BrowseAsync(new(Property.DefaultPropertyId, SortBy: sortBy, Direction: "desc"), CancellationToken.None);
 
         Assert.Equal(lower.Id, ascending.Items[0].Id);
         Assert.Equal(higher.Id, descending.Items[0].Id);
@@ -135,16 +135,49 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
     [Fact]
     public async Task BrowseAsync_InvalidRequests_AreRejected()
     {
-        ReceiptArchiveRequest[] requests = [new(Page: 0), new(PageSize: 101), new(SortBy: "sql"),
-            new(Direction: "invalid"), new(Status: "unknown"), new(Year: 2024, Undated: true),
-            new(Category: "Paint", Uncategorized: true),
-            new(DateFrom: new DateOnly(2025, 1, 1), DateTo: new DateOnly(2024, 1, 1))];
+        ReceiptArchiveRequest[] requests = [new(Guid.Empty), new(Property.DefaultPropertyId, Page: 0), new(Property.DefaultPropertyId, PageSize: 101), new(Property.DefaultPropertyId, SortBy: "sql"),
+            new(Property.DefaultPropertyId, Direction: "invalid"), new(Property.DefaultPropertyId, Status: "unknown"), new(Property.DefaultPropertyId, Year: 2024, Undated: true),
+            new(Property.DefaultPropertyId, Category: "Paint", Uncategorized: true),
+            new(Property.DefaultPropertyId, DateFrom: new DateOnly(2025, 1, 1), DateTo: new DateOnly(2024, 1, 1))];
         foreach (var request in requests)
             await Assert.ThrowsAsync<ArgumentException>(() => _service.BrowseAsync(request, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task BrowseAsync_RestrictsResultsToExplicitPropertyRegardlessOfDefault()
+    {
+        var vacationHome = new Property { Name = "Vacation home" };
+        _dbContext.Properties.Add(vacationHome);
+        _dbContext.Receipts.AddRange(
+            CreateReceipt(new DateOnly(2024, 1, 1), "Main property"),
+            new Receipt
+            {
+                PropertyId = vacationHome.Id,
+                FileName = "vacation-home.pdf",
+                FilePath = $"{Guid.NewGuid():N}.pdf",
+                ContentHash = Guid.NewGuid().ToString("N").PadRight(64, '0'),
+                DocumentDate = new DateOnly(2024, 1, 1),
+                ProcessingStatus = ReceiptProcessingStatus.Completed
+            });
+        await _dbContext.SaveChangesAsync();
+
+        await _dbContext.Properties.Where(property => property.IsDefault)
+            .ExecuteUpdateAsync(update => update.SetProperty(property => property.IsDefault, false));
+        vacationHome.IsDefault = true;
+        await _dbContext.SaveChangesAsync();
+
+        var defaultResult = await _service.BrowseAsync(new(Property.DefaultPropertyId), CancellationToken.None);
+        var selectedResult = await _service.BrowseAsync(
+            new(vacationHome.Id),
+            CancellationToken.None);
+
+        Assert.Equal("Main property", Assert.Single(defaultResult.Items).Category);
+        Assert.Equal("vacation-home.pdf", Assert.Single(selectedResult.Items).FileName);
+    }
+
     private static Receipt CreateReceipt(DateOnly? date, string? category) => new()
     {
+        PropertyId = Property.DefaultPropertyId,
         FileName = "synthetic-receipt.pdf",
         FilePath = $"{Guid.NewGuid():N}.pdf",
         ContentHash = Guid.NewGuid().ToString("N").PadRight(64, '0'),

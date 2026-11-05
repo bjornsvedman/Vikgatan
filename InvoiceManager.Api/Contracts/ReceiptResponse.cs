@@ -5,6 +5,7 @@ namespace InvoiceManager.Api.Contracts;
 /// <summary>Represents a stored receipt and its current processing state.</summary>
 public sealed record ReceiptResponse(
     Guid Id,
+    Guid PropertyId,
     string FileName,
     DateOnly? DocumentDate,
     string? Vendor,

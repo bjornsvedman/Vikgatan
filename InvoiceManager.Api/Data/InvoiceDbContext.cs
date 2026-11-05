@@ -11,13 +11,23 @@ public sealed class InvoiceDbContext(DbContextOptions<InvoiceDbContext> options)
 
     public DbSet<ReceiptLineItem> ReceiptLineItems => Set<ReceiptLineItem>();
 
+    public DbSet<Property> Properties => Set<Property>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasPostgresExtension("vector");
 
+        var properties = modelBuilder.Entity<Property>();
+        properties.HasKey(property => property.Id);
+        properties.HasIndex(property => property.IsDefault)
+            .IsUnique()
+            .HasFilter("\"IsDefault\" = TRUE");
+        properties.Property(property => property.Name).HasMaxLength(128).IsRequired();
+        properties.Property(property => property.CreatedAtUtc).IsRequired();
+
         var receipts = modelBuilder.Entity<Receipt>();
         receipts.HasKey(receipt => receipt.Id);
-        receipts.HasIndex(receipt => receipt.ContentHash).IsUnique();
+        receipts.HasIndex(receipt => new { receipt.PropertyId, receipt.ContentHash }).IsUnique();
         receipts.HasIndex(receipt => new { receipt.DocumentDate, receipt.Vendor });
         receipts.HasIndex(receipt => receipt.Category);
         receipts.HasIndex(receipt => receipt.ProcessingStatus);
@@ -38,6 +48,12 @@ public sealed class InvoiceDbContext(DbContextOptions<InvoiceDbContext> options)
         receipts.Property(receipt => receipt.Embedding).HasColumnType($"vector({EmbeddingDimensions})");
         receipts.Property(receipt => receipt.CreatedAtUtc).IsRequired();
         receipts.Property(receipt => receipt.UpdatedAtUtc).IsRequired();
+
+        properties
+            .HasMany(property => property.Receipts)
+            .WithOne(receipt => receipt.Property)
+            .HasForeignKey(receipt => receipt.PropertyId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         var lineItems = modelBuilder.Entity<ReceiptLineItem>();
         lineItems.HasKey(lineItem => lineItem.Id);

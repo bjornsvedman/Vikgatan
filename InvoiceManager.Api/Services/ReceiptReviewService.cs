@@ -12,14 +12,20 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
     private static readonly Regex CurrencyCodePattern = new("^[A-Za-z]{3}$", RegexOptions.Compiled);
 
     public async Task<IReadOnlyList<ReceiptResponse>> GetReviewQueueAsync(
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid propertyId)
     {
+        if (propertyId == Guid.Empty)
+        {
+            throw new ArgumentException("A non-empty propertyId is required.", nameof(propertyId));
+        }
         var receipts = await dbContext.Receipts
             .AsNoTracking()
             .Include(receipt => receipt.LineItems)
             .Where(receipt => receipt.ProcessingStatus == ReceiptProcessingStatus.Pending
                 || receipt.ProcessingStatus == ReceiptProcessingStatus.NeedsReview
                 || receipt.ProcessingStatus == ReceiptProcessingStatus.Failed)
+            .Where(receipt => receipt.PropertyId == propertyId)
             .OrderBy(receipt => receipt.CreatedAtUtc)
             .ToListAsync(cancellationToken);
 
