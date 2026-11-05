@@ -17,6 +17,23 @@ frontend/.env*
 !.env.example
 storage/
 
+# Private receipts and generated reports (use synthetic fixtures in tests)
+receipts/
+exports/
+expense-summary-*.html
+expense-summary-*.pdf
+*.pdf
+*.jpg
+*.jpeg
+*.png
+*.webp
+!frontend/src/assets/
+!frontend/src/assets/**
+!InvoiceManager.Api/Templates/
+!InvoiceManager.Api/Templates/Skatteverket/
+!InvoiceManager.Api/Templates/Skatteverket/2026/
+!InvoiceManager.Api/Templates/Skatteverket/2026/2197_10_web_2026_x.pdf
+
 # IDE
 .vscode/
 .idea/

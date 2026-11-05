@@ -1,0 +1,48 @@
+.improvement-forms {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 2fr);
+  gap: 24px;
+}
+
+.improvements fieldset,
+.expense-draft {
+  padding: 20px;
+  margin: 0 0 20px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+}
+
+.improvements label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0;
+}
+
+.improvements input,
+.improvements select,
+.improvements textarea {
+  font: inherit;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.receipt-picker-pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.expense-draft li {
+  margin: 8px 0;
+}
+
+@media (max-width: 700px) {
+  .improvement-forms {
+    grid-template-columns: 1fr;
+  }
+}

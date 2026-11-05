@@ -171,6 +171,32 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task DeleteAsync_LinkedDraftProtectsReceiptAndFile_UntilDraftRemoved()
+    {
+        var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\nsynthetic evidence");
+        using (stream)
+        {
+            var uploaded = await _service.IngestAsync(file, default, Property.DefaultPropertyId);
+            var id = uploaded.Receipt!.Id;
+            var receipt = await _dbContext.Receipts.SingleAsync(item => item.Id == id);
+            var expense = new ImprovementExpense
+            {
+                PropertyId = receipt.PropertyId, ReceiptId = receipt.Id, Description = "Synthetic draft"
+            };
+            _dbContext.ImprovementExpenses.Add(expense);
+            await _dbContext.SaveChangesAsync();
+            var path = Path.Combine(_storageRoot, receipt.FilePath);
+            await Assert.ThrowsAsync<ReceiptHasDraftExpensesException>(() => _service.DeleteAsync(id, default));
+            Assert.True(File.Exists(path));
+            Assert.True(await _dbContext.Receipts.AnyAsync(item => item.Id == id));
+            _dbContext.ImprovementExpenses.Remove(expense);
+            await _dbContext.SaveChangesAsync();
+            Assert.True(await _service.DeleteAsync(id, default));
+            Assert.False(File.Exists(path));
+        }
+    }
+
+    [Fact]
     public async Task IngestAsync_EmptyPropertyId_RejectsWithoutUsingDefaultOrWriting()
     {
         var (file, stream) = CreateFile("receipt.pdf", "%PDF-1.4\nsynthetic");
@@ -303,6 +329,25 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
             Assert.Equal(1, _embeddingProvider.Calls);
             Assert.Equal(1, _extractionProvider.Calls);
         }
+
+    }
+
+    [Theory]
+    [InlineData(null, "SEK")]
+    [InlineData("EUR", "EUR")]
+    public async Task IngestAsync_ExtractionCurrency_DefaultsMissingButPreservesForeign(string? currency, string expected)
+    {
+        _extractionProvider.Result = new(
+            new ExtractedReceipt("Synthetic vendor", "2026-01-01", currency, 100, null, null, []), "{}");
+        var service = CreateIngestionService(enabled: true, _extractionProvider, _embeddingProvider);
+        var (file, stream) = CreateFile("synthetic-currency.pdf", "%PDF-1.4\nsynthetic currency");
+        using (stream)
+        {
+            var result = await service.IngestAsync(file, default, Property.DefaultPropertyId);
+            Assert.Equal(expected, result.Receipt!.Currency);
+            Assert.Equal(100m, result.Receipt.TotalAmount);
+            Assert.Equal(expected, (await _dbContext.Receipts.SingleAsync()).Currency);
+        }
     }
 
     [Fact]
@@ -355,6 +400,10 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
                 Category = "Flooring",
                 Description = "Kitchen floor tiles",
                 MarkReviewed = true,
+                ReviewVersion = 0,
+                Expenses = [new(null, "Kitchen floor tiles", new(2024, 5, 12),
+                    ImprovementType.RepairsAndMaintenance, 125.50m, "SEK", null,
+                    "Replaced worn kitchen tiles with equivalent tiles", null, 0m, 0m, null, true)],
                 LineItems =
                 [
                     new UpdateReceiptLineItemRequest
@@ -381,6 +430,7 @@ public sealed class ReceiptIngestionServiceTests(PostgresFixture fixture)
             .SingleAsync(item => item.Id == receipt.Id);
         Assert.Equal(125.50m, savedReceipt.TotalAmount);
         Assert.Single(savedReceipt.LineItems);
+        Assert.NotNull(Assert.Single(result.Receipt.Expenses).ConfirmedAtUtc);
     }
 
     [Fact]

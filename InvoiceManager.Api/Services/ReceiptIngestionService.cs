@@ -98,6 +98,7 @@ public sealed class ReceiptIngestionService(
             FileName = NormalizeFileName(file.FileName, extension),
             FilePath = storedFileName,
             ContentHash = contentHash,
+            Currency = "SEK",
             ProcessingStatus = ReceiptProcessingStatus.Pending,
             CreatedAtUtc = now,
             UpdatedAtUtc = now
@@ -157,6 +158,7 @@ public sealed class ReceiptIngestionService(
         var receipt = await dbContext.Receipts
             .AsNoTracking()
             .Include(item => item.LineItems)
+            .Include(item => item.ImprovementExpenses)
             .SingleOrDefaultAsync(item => item.Id == id, cancellationToken);
 
         return receipt is null ? null : ReceiptResponseMapper.ToResponse(receipt);
@@ -238,7 +240,8 @@ public sealed class ReceiptIngestionService(
             out var documentDate)
             ? documentDate
             : null;
-        receipt.Currency = metadata.Currency is { Length: 3 } currency
+        receipt.Currency = string.IsNullOrWhiteSpace(metadata.Currency) ? "SEK"
+            : metadata.Currency is { Length: 3 } currency
             && currency.All(character => character is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z'))
             ? currency.ToUpperInvariant()
             : null;
@@ -369,6 +372,11 @@ public sealed class ReceiptIngestionService(
             return false;
         }
 
+        if (await dbContext.ImprovementExpenses.AnyAsync(expense => expense.ReceiptId == id, cancellationToken))
+        {
+            throw new ReceiptHasDraftExpensesException();
+        }
+
         var storedFileName = receipt.FilePath;
         string? stagedFilePath = null;
         if (TryGetStoredFilePath(storedFileName, out var storedFilePath) && File.Exists(storedFilePath))
@@ -382,7 +390,7 @@ public sealed class ReceiptIngestionService(
             dbContext.Receipts.Remove(receipt);
             await dbContext.SaveChangesAsync(cancellationToken);
         }
-        catch
+        catch (Exception deletionException)
         {
             if (stagedFilePath is not null && File.Exists(stagedFilePath))
             {
@@ -396,6 +404,17 @@ public sealed class ReceiptIngestionService(
                 }
             }
 
+            if (deletionException is DbUpdateException
+                {
+                    InnerException: PostgresException
+                    {
+                        SqlState: PostgresErrorCodes.ForeignKeyViolation,
+                        ConstraintName: "FK_ImprovementExpenses_Receipts_PropertyId_ReceiptId"
+                    }
+                })
+            {
+                throw new ReceiptHasDraftExpensesException();
+            }
             throw;
         }
 

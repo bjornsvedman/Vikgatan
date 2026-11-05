@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'reac
 import { Archive, ClipboardCheck, FolderOpen, MessageSquare, Save, Search, X } from 'lucide-react'
 import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom'
 import ReceiptArchive from './ReceiptArchive'
+import Improvements from './Improvements'
+import ExpenseReview from './ExpenseReview'
+import { expenseDrafts, type ExpenseDraft, type ExpenseFacts, type ImprovementType } from './expenseReviewModel'
 import CalculationDetails, { type ReceiptCalculation } from './CalculationDetails'
 import './ReviewDesk.css'
 
@@ -24,6 +27,7 @@ export type Receipt = {
   vendor: string | null
   currency: string | null
   totalAmount: number | null
+  totalAmountExact?: string | null
   category: string | null
   description: string | null
   status: ReceiptStatus
@@ -31,6 +35,9 @@ export type Receipt = {
   createdAtUtc: string
   updatedAtUtc: string
   lineItems: ReceiptLineItem[]
+  reviewVersion: number
+  expenses: ExpenseFacts[]
+  expenseSuggestions?: { description: string | null, type: ImprovementType, amount: number | null, evidence: string, uncertainty: string }[]
 }
 
 type PropertyWorkspace = {
@@ -73,6 +80,7 @@ type ReviewDraft = {
   category: string
   description: string
   lineItems: DraftLineItem[]
+  expenses: ExpenseDraft[]
 }
 
 type ApiProblem = {
@@ -100,10 +108,11 @@ function toDraft(receipt: Receipt): ReviewDraft {
   return {
     vendor: receipt.vendor ?? '',
     documentDate: receipt.documentDate ?? '',
-    currency: receipt.currency ?? '',
-    totalAmount: receipt.totalAmount?.toString() ?? '',
+    currency: receipt.currency ?? 'SEK',
+    totalAmount: receipt.totalAmountExact ?? receipt.totalAmount?.toString() ?? '',
     category: receipt.category ?? '',
     description: receipt.description ?? '',
+    expenses: expenseDrafts(receipt),
     lineItems: receipt.lineItems.map((item) => ({
       key: item.id,
       description: item.description,
@@ -128,8 +137,10 @@ function ReviewDesk() {
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const editId = useMatch('/archive/:receiptId/edit')?.params.receiptId
-  const view = editId ? 'edit' : pathname === '/' ? 'home' : pathname === '/archive' ? 'archive' : pathname === '/review' ? 'review' : 'not-found'
-  const pageTitle = view === 'home' ? 'Ask your receipts' : view === 'archive' ? 'Receipt archive' : view === 'review' ? 'Review receipts' : view === 'edit' ? 'Edit reviewed receipt' : 'Page not found'
+  const view = editId ? 'edit' : pathname === '/' ? 'home' : pathname === '/archive' ? 'archive' : pathname === '/review' ? 'review' : pathname === '/improvements' ? 'improvements' : 'not-found'
+  const pageTitle = view === 'home' ? 'Ask your receipts' : view === 'archive' ? 'Receipt archive' : view === 'review' ? 'Review receipts' : view === 'edit' ? 'Edit reviewed receipt' : view === 'improvements' ? 'Improvement readiness' : 'Page not found'
+  const [improvementsDirty, setImprovementsDirty] = useState(false)
+  const [improvementsSaving, setImprovementsSaving] = useState(false)
   const [archiveVersion, setArchiveVersion] = useState(0)
   const [lastSavedReceipt, setLastSavedReceipt] = useState<Receipt | null>(null)
   const [receipts, setReceipts] = useState<Receipt[]>([])
@@ -153,6 +164,18 @@ function ReviewDesk() {
   const folderImportController = useRef<AbortController | null>(null)
   const draft = editId ? editDraft : reviewDraft
   const setDraft = editId ? setEditDraft : setReviewDraft
+  const reviewDirty = draft !== null && selectedReceiptForDraft() !== null
+    && JSON.stringify(draft) !== JSON.stringify(toDraft(selectedReceiptForDraft()!))
+
+  function selectedReceiptForDraft() {
+    return editId ? editReceipt : receipts.find(receipt => receipt.id === selectedId) ?? null
+  }
+
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault() }
+    if (reviewDirty || saving) window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [reviewDirty, saving])
 
   const configureFolderInput = useCallback((element: HTMLInputElement | null) => {
     element?.setAttribute('webkitdirectory', '')
@@ -206,7 +229,7 @@ function ReviewDesk() {
   }, [])
 
   useEffect(() => {
-    if (!editId) return
+    if (!editId || !selectedPropertyId) return
     const controller = new AbortController()
     async function loadReceipt() {
       setEditLoading(true)
@@ -218,6 +241,7 @@ function ReviewDesk() {
         const response = await fetch(`/api/documents/${encodeURIComponent(editId!)}`, { signal: controller.signal })
         if (!response.ok) throw await responseError(response)
         const receipt = await response.json() as Receipt
+        if (receipt.propertyId !== selectedPropertyId) throw new Error('Select the receipt’s property before editing it.')
         if (receipt.status !== 'Completed') throw new Error('This receipt is not approved. Use the review queue to review it.')
         if (!controller.signal.aborted) {
           setEditReceipt(receipt)
@@ -231,7 +255,7 @@ function ReviewDesk() {
     }
     void loadReceipt()
     return () => controller.abort()
-  }, [editId])
+  }, [editId, selectedPropertyId])
 
   const selectedReceipt = editId
     ? editReceipt?.id === editId ? editReceipt : null
@@ -258,12 +282,14 @@ function ReviewDesk() {
 
   async function selectProperty(propertyId: string) {
     if (!propertyId || propertyId === selectedPropertyId) return
+    if (saving || improvementsSaving || ((improvementsDirty || reviewDirty) && !window.confirm('Discard unsaved review or property changes?'))) return
     setError('')
     setNotice('')
     try {
       const response = await fetch(`/api/properties/${encodeURIComponent(propertyId)}/default`, { method: 'PUT' })
       if (!response.ok) throw await responseError(response)
       setSelectedPropertyId(propertyId)
+      setImprovementsDirty(false)
       setProperties((current) => current.map((property) => ({ ...property, isDefault: property.id === propertyId })))
       setReceipts([])
       setSelectedId(null)
@@ -296,6 +322,7 @@ function ReviewDesk() {
   }
 
   function selectReceipt(receipt: Receipt) {
+    if (saving || (reviewDirty && !window.confirm('Discard unsaved receipt review?'))) return
     setSelectedId(receipt.id)
     setReviewDraft(toDraft(receipt))
     setError('')
@@ -454,12 +481,15 @@ function ReviewDesk() {
   }
 
   function updateDraft<K extends keyof ReviewDraft>(key: K, value: ReviewDraft[K]) {
-    setDraft((current) => current ? { ...current, [key]: value } : current)
+    setDraft((current) => current ? { ...current, [key]: value,
+      expenses: key === 'expenses' ? value as ExpenseDraft[] : current.expenses.map(expense => ({ ...expense, confirm: false })),
+    } : current)
   }
 
   function updateLineItem(index: number, patch: Partial<DraftLineItem>) {
     setDraft((current) => current ? {
       ...current,
+      expenses: current.expenses.map(expense => ({ ...expense, confirm: false })),
       lineItems: current.lineItems.map((item, itemIndex) =>
         itemIndex === index ? { ...item, ...patch } : item),
     } : current)
@@ -468,6 +498,7 @@ function ReviewDesk() {
   function addLineItem() {
     setDraft((current) => current ? {
       ...current,
+      expenses: current.expenses.map(expense => ({ ...expense, confirm: false })),
       lineItems: [...current.lineItems, {
         key: crypto.randomUUID(),
         description: '',
@@ -482,6 +513,7 @@ function ReviewDesk() {
   function removeLineItem(index: number) {
     setDraft((current) => current ? {
       ...current,
+      expenses: current.expenses.map(expense => ({ ...expense, confirm: false })),
       lineItems: current.lineItems.filter((_, itemIndex) => itemIndex !== index),
     } : current)
   }
@@ -503,10 +535,16 @@ function ReviewDesk() {
           vendor: draft.vendor,
           documentDate: draft.documentDate || null,
           currency: draft.currency,
-          totalAmount: draft.totalAmount === '' ? null : Number(draft.totalAmount),
+          totalAmount: draft.totalAmount === '' ? null : draft.totalAmount,
           category: draft.category,
           description: draft.description,
-          markReviewed: !!editId || markReviewed,
+          markReviewed,
+          reviewVersion: selectedReceipt.reviewVersion ?? 0,
+          expenses: draft.expenses.map(expense => ({
+            ...expense, expenseDate: expense.expenseDate || null, amount: expense.amount || null,
+            currency: expense.currency || null, rotAmount: expense.rotAmount || null,
+            otherCompensationAmount: expense.otherCompensationAmount || null,
+          })),
           lineItems: draft.lineItems.map((item) => ({
             description: item.description,
             quantity: item.quantity === '' ? null : Number(item.quantity),
@@ -522,9 +560,11 @@ function ReviewDesk() {
       setLastSavedReceipt(updated)
       setQuestionResponse(null)
       if (editId) {
+        setEditReceipt(updated)
+        setEditDraft(toDraft(updated))
         setNotice('Receipt updated.')
         setArchiveVersion((version) => version + 1)
-        navigate('/archive')
+        if (markReviewed) navigate('/archive')
       } else {
         setNotice(markReviewed ? 'Review completed.' : 'Review draft saved.')
         await refreshQueue(markReviewed ? undefined : updated.id)
@@ -566,7 +606,20 @@ function ReviewDesk() {
   const pendingCount = receipts.filter((receipt) => receipt.status === 'Pending').length
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" onClickCapture={event => {
+      const target = event.target
+      const link = target instanceof Element ? target.closest('a') : null
+      if (!link || link.target === '_blank' || !link.getAttribute('href')?.startsWith('/') || link.getAttribute('href') === pathname) return
+      if (saving || improvementsSaving || ((improvementsDirty || reviewDirty) && !window.confirm('Discard unsaved review or property changes?'))) {
+        event.preventDefault(); event.stopPropagation()
+      } else {
+        setImprovementsDirty(false)
+        if (reviewDirty) {
+          const source = selectedReceiptForDraft()
+          setDraft(source ? toDraft(source) : null)
+        }
+      }
+    }}>
       <header className="topbar">
         <Link className="wordmark" to="/" aria-label="Receipt desk home">
           <span className="wordmark-mark">R</span>
@@ -579,7 +632,7 @@ function ReviewDesk() {
               aria-label="Default property"
               onChange={(event) => void selectProperty(event.target.value)}
               value={selectedPropertyId}
-              disabled={properties.length === 0 || uploading}
+              disabled={properties.length === 0 || uploading || improvementsSaving}
             >
               {properties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}
             </select>
@@ -587,7 +640,7 @@ function ReviewDesk() {
               type="button"
               className="text-button"
               onClick={() => void createProperty()}
-              disabled={loading || uploading}
+              disabled={loading || uploading || improvementsSaving}
             >
               Add property
             </button>
@@ -609,6 +662,7 @@ function ReviewDesk() {
         <NavLink to="/" end><MessageSquare size={16} aria-hidden="true" />Ask receipts</NavLink>
         <NavLink to="/archive"><Archive size={16} aria-hidden="true" />Archive</NavLink>
         <NavLink to="/review"><ClipboardCheck size={16} aria-hidden="true" />Review<span className="nav-count">{receipts.length}</span></NavLink>
+        <NavLink to="/improvements">Improvements</NavLink>
       </nav>
 
       <main className="page-content">
@@ -723,6 +777,14 @@ function ReviewDesk() {
           updatedReceipt={lastSavedReceipt}
         />
 
+        {view === 'improvements' && selectedPropertyId && <Improvements
+          key={selectedPropertyId}
+          propertyId={selectedPropertyId}
+          propertyName={properties.find(property => property.id === selectedPropertyId)?.name ?? ''}
+          onDirty={setImprovementsDirty}
+          onSaving={setImprovementsSaving}
+        />}
+
         {view === 'not-found' && <Link className="text-button" to="/">Back to questions</Link>}
 
         <div id="review-panel" aria-labelledby="page-title" hidden={view !== 'review' && view !== 'edit'}>
@@ -774,7 +836,7 @@ function ReviewDesk() {
                 {editId ? <Link to="/archive">Back to archive</Link> : <p>Upload a file or choose an item from the queue.</p>}
               </div>
             ) : (
-              <form aria-busy={saving} onSubmit={(event) => { event.preventDefault(); void saveReview(false) }}>
+              <form aria-busy={saving} inert={saving} onSubmit={(event) => { event.preventDefault(); void saveReview(false) }}>
                 <div className="detail-heading">
                   <div className="document-title">
                     <span className="file-type">{selectedReceipt.fileName.split('.').pop()?.toUpperCase() ?? 'FILE'}</span>
@@ -826,9 +888,19 @@ function ReviewDesk() {
                       <span>Total amount</span>
                       <div className="money-input">
                         <input type="number" min="0" step="0.0001" value={draft.totalAmount} onChange={(event) => updateDraft('totalAmount', event.target.value)} />
-                        <input className="currency-input" aria-label="Currency" maxLength={3} value={draft.currency} onChange={(event) => updateDraft('currency', event.target.value.toUpperCase())} placeholder="SEK" />
+                        <input className="currency-input" aria-label="Currency" value="SEK" readOnly />
                       </div>
                     </label>
+                    <p className="field-wide">This first version supports SEK only. No currency conversions.</p>
+                    {(draft.currency !== 'SEK' || draft.expenses.some(expense => expense.currency !== 'SEK')) && <div className="message message-error field-wide" role="status">
+                      <p>Stored receipt currency: {draft.currency || 'not set'}. Some amounts are not SEK and cannot be approved or included in confirmed report totals. Their original currency is preserved.</p>
+                      <button type="button" className="text-button" onClick={() => {
+                        if (!window.confirm('Only correct this if the original receipt and all expense amounts are already SEK and the currency was misread. This does not convert or change any amounts. Continue?')) return
+                        setDraft(current => current ? { ...current, currency: 'SEK',
+                          expenses: current.expenses.map(expense => ({ ...expense, currency: 'SEK', confirm: false })),
+                        } : current)
+                      }}>Correct a misread currency to SEK</button>
+                    </div>}
                     <label className="field">
                       <span>Category</span>
                       <input value={draft.category} onChange={(event) => updateDraft('category', event.target.value)} maxLength={128} />
@@ -878,12 +950,21 @@ function ReviewDesk() {
                   )}
                 </div>
 
+                <ExpenseReview receipt={{ ...selectedReceipt, currency: draft.currency, totalAmountExact: draft.totalAmount,
+                  description: draft.description, vendor: draft.vendor }} expenses={draft.expenses}
+                  onChange={expenses => updateDraft('expenses', expenses)} disabled={saving} />
                 <div className="form-actions">
                   <span className="save-note">Changes are saved to your local archive.</span>
                   <div>
                     {editId ? <>
-                      <button className="button-secondary edit-action" type="button" disabled={saving} onClick={() => navigate('/archive')}><X size={16} aria-hidden="true" />Cancel</button>
-                      <button className="button-primary edit-action" type="submit" disabled={saving || !requestToken}><Save size={16} aria-hidden="true" />{saving ? 'Saving...' : 'Save changes'}</button>
+                      <button className="button-secondary edit-action" type="button" disabled={saving} onClick={() => {
+                        if (!reviewDirty || window.confirm('Discard unsaved receipt review?')) {
+                          setEditDraft(selectedReceipt ? toDraft(selectedReceipt) : null)
+                          navigate('/archive')
+                        }
+                      }}><X size={16} aria-hidden="true" />Cancel</button>
+                      <button className="button-secondary edit-action" type="submit" disabled={saving || !requestToken}>Save draft changes</button>
+                      <button className="button-primary edit-action" type="button" disabled={saving || !requestToken} onClick={() => void saveReview(true)}><Save size={16} aria-hidden="true" />{saving ? 'Saving...' : 'Confirm and save'}</button>
                     </> : <>
                       <button className="button-secondary" type="submit" disabled={saving || !requestToken}>{saving ? 'Saving…' : 'Save draft'}</button>
                       <button className="button-primary" type="button" disabled={saving || !requestToken} onClick={() => void saveReview(true)}>{saving ? 'Saving…' : 'Mark reviewed'}</button>

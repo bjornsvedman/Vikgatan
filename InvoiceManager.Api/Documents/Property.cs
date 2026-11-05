@@ -10,7 +10,20 @@ public sealed class Property
 
     public bool IsDefault { get; set; }
 
+    public PropertyType? PropertyType { get; set; }
+
+    public DateOnly? AcquisitionDate { get; set; }
+
+    public DateOnly? SaleDate { get; set; }
+
     public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 
     public List<Receipt> Receipts { get; set; } = [];
+}
+
+public enum PropertyType
+{
+    SmallHouse,
+    Bostadsratt,
+    OwnerOccupiedApartment
 }

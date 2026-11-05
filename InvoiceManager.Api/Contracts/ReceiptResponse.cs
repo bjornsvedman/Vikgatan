@@ -17,7 +17,13 @@ public sealed record ReceiptResponse(
     string? ProcessingError,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
-    IReadOnlyList<ReceiptLineItemResponse> LineItems);
+    IReadOnlyList<ReceiptLineItemResponse> LineItems)
+{
+    public int ReviewVersion { get; init; }
+    public string? TotalAmountExact { get; init; }
+    public IReadOnlyList<ReceiptExpenseResponse> Expenses { get; init; } = [];
+    public IReadOnlyList<Services.ExtractedExpenseSuggestion> ExpenseSuggestions { get; init; } = [];
+}
 
 /// <summary>Represents an item extracted from a receipt or invoice.</summary>
 public sealed record ReceiptLineItemResponse(

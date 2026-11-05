@@ -46,7 +46,8 @@ public static class ReceiptEndpoints
             .WithName("DeleteReceipt")
             .WithSummary("Permanently delete a receipt and its stored file")
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
 
         documents.MapGet("/review-queue", GetReviewQueueAsync)
             .WithName("GetReceiptReviewQueue")
@@ -153,13 +154,21 @@ public static class ReceiptEndpoints
             : TypedResults.PhysicalFile(file.FullPath, file.ContentType, enableRangeProcessing: true);
     }
 
-    private static async Task<Results<NoContent, NotFound>> DeleteAsync(
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> DeleteAsync(
         Guid id,
         IReceiptIngestionService ingestionService,
         CancellationToken cancellationToken)
     {
-        var deleted = await ingestionService.DeleteAsync(id, cancellationToken);
-        return deleted ? TypedResults.NoContent() : TypedResults.NotFound();
+        try
+        {
+            var deleted = await ingestionService.DeleteAsync(id, cancellationToken);
+            return deleted ? TypedResults.NoContent() : TypedResults.NotFound();
+        }
+        catch (ReceiptHasDraftExpensesException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict,
+                title: "Receipt is used by draft expenses.", detail: exception.Message);
+        }
     }
 
     private static async Task<Results<Ok<IReadOnlyList<ReceiptResponse>>, ProblemHttpResult>> GetReviewQueueAsync(
@@ -191,6 +200,8 @@ public static class ReceiptEndpoints
                 statusCode: StatusCodes.Status400BadRequest,
                 title: "Review data is invalid.",
                 detail: string.Join(" ", result.ValidationErrors)),
+            ReceiptReviewStatus.Conflict => TypedResults.Problem(statusCode: StatusCodes.Status409Conflict,
+                title: "Receipt changed.", detail: string.Join(" ", result.ValidationErrors)),
             _ => TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError)
         };
     }

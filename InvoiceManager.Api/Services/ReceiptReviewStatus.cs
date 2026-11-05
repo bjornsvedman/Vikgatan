@@ -4,5 +4,6 @@ public enum ReceiptReviewStatus
 {
     Updated,
     NotFound,
-    Invalid
+    Invalid,
+    Conflict
 }

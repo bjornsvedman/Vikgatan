@@ -3,6 +3,7 @@ using InvoiceManager.Api.Contracts;
 using InvoiceManager.Api.Data;
 using InvoiceManager.Api.Documents;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace InvoiceManager.Api.Services;
 
@@ -22,6 +23,7 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
         var receipts = await dbContext.Receipts
             .AsNoTracking()
             .Include(receipt => receipt.LineItems)
+            .Include(receipt => receipt.ImprovementExpenses)
             .Where(receipt => receipt.ProcessingStatus == ReceiptProcessingStatus.Pending
                 || receipt.ProcessingStatus == ReceiptProcessingStatus.NeedsReview
                 || receipt.ProcessingStatus == ReceiptProcessingStatus.Failed)
@@ -39,6 +41,7 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
     {
         var receipt = await dbContext.Receipts
             .Include(item => item.LineItems)
+            .Include(item => item.ImprovementExpenses)
             .SingleOrDefaultAsync(item => item.Id == id, cancellationToken);
 
         if (receipt is null)
@@ -46,11 +49,38 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
             return new(ReceiptReviewStatus.NotFound, null, []);
         }
 
+        request = request with { Currency = string.IsNullOrWhiteSpace(request.Currency)
+            ? string.IsNullOrWhiteSpace(receipt.Currency) ? "SEK" : receipt.Currency : request.Currency };
+        if (request.Expenses is not null)
+            request = request with { Expenses = request.Expenses.Select(input => input is null ? input! : input with
+            {
+                Currency = string.IsNullOrWhiteSpace(input.Currency)
+                    ? receipt.ImprovementExpenses.SingleOrDefault(expense => expense.Id == input.Id)?.Currency ?? request.Currency : input.Currency,
+                RotAmount = input.RotAmount ?? receipt.ImprovementExpenses.SingleOrDefault(expense => expense.Id == input.Id)?.RotAmount,
+                OtherCompensationAmount = input.OtherCompensationAmount ?? receipt.ImprovementExpenses.SingleOrDefault(expense => expense.Id == input.Id)?.OtherCompensationAmount,
+                AdjustmentsAlreadyInAmount = input.AdjustmentsAlreadyInAmount ?? receipt.ImprovementExpenses.SingleOrDefault(expense => expense.Id == input.Id)?.AdjustmentsAlreadyInAmount
+            }).ToList() };
         var errors = Validate(request);
+        if (request.MarkReviewed && request.Currency?.Trim().ToUpperInvariant() != "SEK")
+            errors.Add("This version supports SEK approval only; no currency conversion is available.");
+        if (request.Expenses is not null)
+        {
+            errors.AddRange(ReceiptExpenseReviewRules.Validate(request.Expenses,
+                request.MarkReviewed, request.TotalAmount, request.Currency));
+            if (request.ReviewVersion is null)
+                errors.Add("A review version is required when saving expense portions.");
+            if (request.Expenses.Any(expense => expense is not null && expense.Id.HasValue
+                && !receipt.ImprovementExpenses.Any(stored => stored.Id == expense.Id)))
+                errors.Add("Expense portion IDs must belong to this receipt.");
+        }
+        else if (request.MarkReviewed && receipt.ProcessingStatus != ReceiptProcessingStatus.Completed)
+            errors.Add("Classify the receipt's expenses before approval.");
         if (errors.Count > 0)
         {
             return new(ReceiptReviewStatus.Invalid, null, errors);
         }
+        if (request.ReviewVersion is int version && version != receipt.ReviewVersion)
+            return new(ReceiptReviewStatus.Conflict, null, ["The receipt changed. Reload it before saving; your changes have not been saved."]);
 
         var contentChanged = receipt.Vendor != NormalizeOptionalText(request.Vendor)
             || receipt.DocumentDate != request.DocumentDate
@@ -71,6 +101,61 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
                 Category = NormalizeOptionalText(item.Category)
             }));
 
+        var previousVersion = receipt.ReviewVersion++;
+        if (contentChanged) ReceiptExpenseReviewRules.Invalidate(receipt);
+        if (request.Expenses is not null)
+        {
+            var retainedIds = request.Expenses.Where(expense => expense.Id.HasValue).Select(expense => expense.Id!.Value).ToHashSet();
+            foreach (var removed in receipt.ImprovementExpenses.Where(expense => !retainedIds.Contains(expense.Id)).ToArray())
+            {
+                dbContext.ImprovementExpenses.Remove(removed);
+                receipt.ImprovementExpenses.Remove(removed);
+            }
+            foreach (var input in request.Expenses)
+            {
+                var expense = input.Id is Guid expenseId
+                    ? receipt.ImprovementExpenses.Single(item => item.Id == expenseId)
+                    : new ImprovementExpense { ReceiptId = receipt.Id, PropertyId = receipt.PropertyId };
+                var changed = expense.Description != input.Description!.Trim()
+                    || expense.ExpenseDate != input.ExpenseDate || expense.Type != input.Type
+                    || expense.Amount != input.Amount || expense.Currency != input.Currency?.Trim().ToUpperInvariant()
+                    || expense.Notes != NormalizeOptionalText(input.Notes)
+                    || expense.WorkDetails != NormalizeOptionalText(input.WorkDetails)
+                    || expense.ExclusionReason != NormalizeOptionalText(input.ExclusionReason)
+                    || expense.RotAmount != input.RotAmount || expense.OtherCompensationAmount != input.OtherCompensationAmount
+                    || expense.AdjustmentsAlreadyInAmount != input.AdjustmentsAlreadyInAmount;
+                expense.Description = input.Description!.Trim();
+                expense.ExpenseDate = input.ExpenseDate;
+                expense.Type = input.Type;
+                expense.Amount = input.Amount;
+                expense.Currency = NormalizeOptionalText(input.Currency)?.ToUpperInvariant();
+                expense.Notes = NormalizeOptionalText(input.Notes);
+                expense.WorkDetails = NormalizeOptionalText(input.WorkDetails);
+                expense.ExclusionReason = NormalizeOptionalText(input.ExclusionReason);
+                expense.RotAmount = input.RotAmount;
+                expense.OtherCompensationAmount = input.OtherCompensationAmount;
+                expense.AdjustmentsAlreadyInAmount = input.AdjustmentsAlreadyInAmount;
+                if (changed || !input.Confirm)
+                {
+                    expense.ConfirmedAtUtc = null;
+                    expense.ConfirmedReceiptVersion = null;
+                    expense.UpdatedAtUtc = DateTimeOffset.UtcNow;
+                }
+                if (request.MarkReviewed && input.Confirm)
+                {
+                    expense.ConfirmedAtUtc ??= DateTimeOffset.UtcNow;
+                    expense.ConfirmedReceiptVersion = receipt.ReviewVersion;
+                }
+                if (input.Id is null)
+                {
+                    receipt.ImprovementExpenses.Add(expense);
+                    dbContext.ImprovementExpenses.Add(expense);
+                }
+            }
+        }
+        foreach (var expense in receipt.ImprovementExpenses.Where(expense => expense.ConfirmedReceiptVersion == previousVersion))
+            expense.ConfirmedReceiptVersion = receipt.ReviewVersion;
+
         receipt.Vendor = NormalizeOptionalText(request.Vendor);
         receipt.DocumentDate = request.DocumentDate;
         receipt.Currency = request.Currency?.Trim().ToUpperInvariant();
@@ -79,7 +164,8 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
         receipt.Description = NormalizeOptionalText(request.Description);
         receipt.ProcessingStatus = request.MarkReviewed
             ? ReceiptProcessingStatus.Completed
-            : ReceiptProcessingStatus.NeedsReview;
+            : receipt.ProcessingStatus == ReceiptProcessingStatus.Completed
+                ? ReceiptProcessingStatus.Completed : ReceiptProcessingStatus.NeedsReview;
         receipt.ProcessingError = null;
         receipt.UpdatedAtUtc = DateTimeOffset.UtcNow;
         if (contentChanged)
@@ -103,7 +189,19 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
             });
         }
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try { await dbContext.SaveChangesAsync(cancellationToken); }
+        catch (DbUpdateConcurrencyException)
+        {
+            return new(ReceiptReviewStatus.Conflict, null, ["The receipt changed while saving. Reload it before retrying."]);
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException
+            {
+                SqlState: PostgresErrorCodes.ForeignKeyViolation,
+                ConstraintName: "FK_ImprovementExpenses_Receipts_PropertyId_ReceiptId"
+            })
+        {
+            return new(ReceiptReviewStatus.Conflict, null, ["The source receipt was removed while saving. No review changes were saved."]);
+        }
         return new(ReceiptReviewStatus.Updated, ReceiptResponseMapper.ToResponse(receipt), []);
     }
 
@@ -126,6 +224,9 @@ public sealed class ReceiptReviewService(InvoiceDbContext dbContext) : IReceiptR
         {
             errors.Add("Total amount cannot be negative.");
         }
+        if (request.TotalAmount is decimal total &&
+            (total >= 100000000000000m || decimal.Round(total, 4) != total))
+            errors.Add("Total amount must be below 100000000000000 and have at most four decimal places.");
 
         if (request.Category?.Length > 128)
         {

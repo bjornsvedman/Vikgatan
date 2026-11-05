@@ -45,4 +45,8 @@ public sealed class Receipt
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 
     public List<ReceiptLineItem> LineItems { get; set; } = [];
+
+    public List<ImprovementExpense> ImprovementExpenses { get; set; } = [];
+
+    public int ReviewVersion { get; set; }
 }

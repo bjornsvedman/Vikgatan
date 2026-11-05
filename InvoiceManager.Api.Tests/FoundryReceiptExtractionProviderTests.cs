@@ -14,7 +14,7 @@ public sealed class FoundryReceiptExtractionProviderTests
     public async Task ExtractAsync_Pdf_UsesResponsesApiAndParsesStructuredMetadata()
     {
         const string output = """
-            {"vendor":"Tile House","document_date":"2024-05-12","currency":"SEK","total_amount":125.5,"category":"Flooring","description":"Kitchen tiles","line_items":[]}
+            {"vendor":"Tile House","document_date":"2024-05-12","currency":"SEK","total_amount":125.5,"category":"Flooring","description":"Kitchen tiles","line_items":[],"expense_suggestions":[{"description":"Kitchen tiles","type":"Unclassified","amount":125.5,"evidence":"Tiles purchase line","uncertainty":"Previous material and use are unknown"}]}
             """;
         var handler = new StubHttpMessageHandler(new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -33,6 +33,7 @@ public sealed class FoundryReceiptExtractionProviderTests
 
         Assert.Equal("Tile House", result.Metadata.Vendor);
         Assert.Equal(125.5m, result.Metadata.TotalAmount);
+        Assert.Equal("Unclassified", Assert.Single(result.Metadata.ExpenseSuggestions!).Type);
         Assert.Equal("https://unit-test.services.ai.azure.com/openai/v1/responses", handler.Request!.RequestUri!.ToString());
         Assert.Equal("Bearer test-token", handler.Request.Headers.Authorization!.ToString());
         Assert.Equal("https://ai.azure.com/.default", credential.RequestedScope);
@@ -44,6 +45,24 @@ public sealed class FoundryReceiptExtractionProviderTests
         Assert.Equal("input_file", content[1].GetProperty("type").GetString());
         Assert.StartsWith("data:application/pdf;base64,", content[1].GetProperty("file_data").GetString());
         Assert.True(body.RootElement.GetProperty("text").GetProperty("format").GetProperty("strict").GetBoolean());
+        Assert.Contains("Never approve", content[0].GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task ExtractAsync_InvalidExpenseSuggestion_RequiresManualFallback()
+    {
+        const string output = """
+            {"line_items":[],"expense_suggestions":[{"description":"Tiles","type":"AutomaticallyApproved","amount":100,"evidence":"Tiles","uncertainty":""}]}
+            """;
+        var handler = new StubHttpMessageHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { output_text = output })
+        });
+        using var httpClient = new HttpClient(handler);
+        var provider = CreateProvider(httpClient, new TestTokenCredential());
+        using var document = new MemoryStream(Encoding.ASCII.GetBytes("%PDF-1.4 synthetic"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => provider.ExtractAsync(
+            document, "synthetic.pdf", "application/pdf", default));
     }
 
     [Fact]

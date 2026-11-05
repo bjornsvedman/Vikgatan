@@ -24,11 +24,90 @@ namespace InvoiceManager.Api.Migrations
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "vector");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("InvoiceManager.Api.Documents.ImprovementExpense", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool?>("AdjustmentsAlreadyInAmount")
+                        .HasColumnType("boolean");
+
+                    b.Property<decimal?>("Amount")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<DateTimeOffset?>("ConfirmedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("ConfirmedReceiptVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Currency")
+                        .HasMaxLength(3)
+                        .HasColumnType("character(3)")
+                        .IsFixedLength();
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("ExclusionReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateOnly?>("ExpenseDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<decimal?>("OtherCompensationAmount")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ReceiptId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("RotAmount")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("WorkDetails")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PropertyId", "ReceiptId");
+
+                    b.ToTable("ImprovementExpenses");
+                });
+
             modelBuilder.Entity("InvoiceManager.Api.Documents.Property", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<DateOnly?>("AcquisitionDate")
+                        .HasColumnType("date");
 
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
@@ -40,6 +119,13 @@ namespace InvoiceManager.Api.Migrations
                         .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
+
+                    b.Property<string>("PropertyType")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateOnly?>("SaleDate")
+                        .HasColumnType("date");
 
                     b.HasKey("Id");
 
@@ -117,6 +203,10 @@ namespace InvoiceManager.Api.Migrations
                     b.Property<Guid>("PropertyId")
                         .HasColumnType("uuid");
 
+                    b.Property<int>("ReviewVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
+
                     b.Property<decimal?>("TotalAmount")
                         .HasPrecision(18, 4)
                         .HasColumnType("numeric(18,4)");
@@ -179,6 +269,24 @@ namespace InvoiceManager.Api.Migrations
                     b.ToTable("ReceiptLineItems");
                 });
 
+            modelBuilder.Entity("InvoiceManager.Api.Documents.ImprovementExpense", b =>
+                {
+                    b.HasOne("InvoiceManager.Api.Documents.Property", null)
+                        .WithMany()
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("InvoiceManager.Api.Documents.Receipt", "Receipt")
+                        .WithMany("ImprovementExpenses")
+                        .HasForeignKey("PropertyId", "ReceiptId")
+                        .HasPrincipalKey("PropertyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Receipt");
+                });
+
             modelBuilder.Entity("InvoiceManager.Api.Documents.Receipt", b =>
                 {
                     b.HasOne("InvoiceManager.Api.Documents.Property", "Property")
@@ -208,6 +316,8 @@ namespace InvoiceManager.Api.Migrations
 
             modelBuilder.Entity("InvoiceManager.Api.Documents.Receipt", b =>
                 {
+                    b.Navigation("ImprovementExpenses");
+
                     b.Navigation("LineItems");
                 });
 #pragma warning restore 612, 618
