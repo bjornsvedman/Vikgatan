@@ -61,6 +61,12 @@ dotnet user-secrets set "Foundry:Extraction:Deployment" "<vision deployment name
 
 New uploads are then sent to the configured Responses API deployment. Successful extraction fills draft metadata, stores the raw structured result, generates a 1536-dimensional embedding from the extracted summary, and queues the receipt as `NeedsReview`. Failed extraction leaves the original file available for manual entry. Use only synthetic documents for unapproved environments.
 
+## Import receipts from a folder
+
+On the **Review** page, select **Import folder** and choose a local folder. The browser includes files from its subfolders; only PDF, JPG/JPEG, PNG, and WEBP files are uploaded. Each selected file goes through the normal upload validation and exact-content duplicate check. New files are added to the review queue, not automatically approved. Unsupported files are skipped, and invalid or failed uploads are reported individually while the remaining files continue. The UI shows progress and lets you cancel the remaining uploads; a request already in flight may still finish, so check the archive after cancellation.
+
+The browser sends the selected files to the local API; it does not send local folder paths or grant the API permission to scan arbitrary directories. Different scans or photos of the same receipt are not detected as duplicates and remain for human review.
+
 ## Browse the receipt archive
 
 The **Archive** page at `/archive` shows all stored receipts, including reviewed documents, grouped by document year (newest first) with undated receipts last. Sort within each year by category, document date, vendor, or stored amount in either direction. Amount sorting does not convert currencies; use the currency filter when comparing amounts.

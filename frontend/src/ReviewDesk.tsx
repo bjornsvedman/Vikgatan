@@ -1,5 +1,5 @@
-import { useEffect, useState, type ChangeEvent } from 'react'
-import { Archive, ClipboardCheck, MessageSquare, Save, Search, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { Archive, ClipboardCheck, FolderOpen, MessageSquare, Save, Search, X } from 'lucide-react'
 import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom'
 import ReceiptArchive from './ReceiptArchive'
 import CalculationDetails, { type ReceiptCalculation } from './CalculationDetails'
@@ -73,6 +73,22 @@ type ApiProblem = {
   detail?: string
 }
 
+type FolderImportOutcome = {
+  fileName: string
+  status: 'imported' | 'duplicate' | 'skipped' | 'failed' | 'cancelled'
+  message: string
+}
+
+type FolderImportReport = {
+  totalFiles: number
+  outcomes: FolderImportOutcome[]
+  currentFile: string | null
+  running: boolean
+  cancelled: boolean
+}
+
+const supportedReceiptExtensions = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.webp'])
+
 function toDraft(receipt: Receipt): ReviewDraft {
   return {
     vendor: receipt.vendor ?? '',
@@ -119,13 +135,19 @@ function ReviewDesk() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [folderImport, setFolderImport] = useState<FolderImportReport | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [question, setQuestion] = useState('')
   const [questionResponse, setQuestionResponse] = useState<ReceiptQuestionResponse | null>(null)
   const [asking, setAsking] = useState(false)
+  const folderImportController = useRef<AbortController | null>(null)
   const draft = editId ? editDraft : reviewDraft
   const setDraft = editId ? setEditDraft : setReviewDraft
+
+  const configureFolderInput = useCallback((element: HTMLInputElement | null) => {
+    element?.setAttribute('webkitdirectory', '')
+  }, [])
 
   useEffect(() => {
     document.title = `${pageTitle} | Renovation archive`
@@ -253,6 +275,123 @@ function ReviewDesk() {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not upload this file.')
     } finally {
+      setUploading(false)
+    }
+  }
+
+  async function importFolder(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    if (files.length === 0 || uploading) return
+
+    const supportedFiles: File[] = []
+    const outcomes: FolderImportOutcome[] = []
+    for (const file of files) {
+      const fileName = file.webkitRelativePath || file.name
+      const extensionIndex = file.name.lastIndexOf('.')
+      const extension = extensionIndex < 0 ? '' : file.name.slice(extensionIndex).toLowerCase()
+      if (supportedReceiptExtensions.has(extension)) {
+        supportedFiles.push(file)
+      } else {
+        outcomes.push({ fileName, status: 'skipped', message: 'Unsupported file type.' })
+      }
+    }
+
+    const controller = new AbortController()
+    folderImportController.current = controller
+    setUploading(true)
+    setError('')
+    setNotice('')
+    setFolderImport({ totalFiles: files.length, outcomes: [...outcomes], currentFile: null, running: true, cancelled: false })
+    let lastImportedId: string | undefined
+
+    try {
+      for (let index = 0; index < supportedFiles.length; index += 1) {
+        const file = supportedFiles[index]
+        const fileName = file.webkitRelativePath || file.name
+        if (controller.signal.aborted) {
+          for (const unprocessed of supportedFiles.slice(index)) {
+            outcomes.push({
+              fileName: unprocessed.webkitRelativePath || unprocessed.name,
+              status: 'cancelled',
+              message: 'Not uploaded because the folder import was cancelled.',
+            })
+          }
+          break
+        }
+
+        setFolderImport({ totalFiles: files.length, outcomes: [...outcomes], currentFile: fileName, running: true, cancelled: false })
+        let outcome: FolderImportOutcome
+        try {
+          const form = new FormData()
+          form.append('file', file)
+          const response = await fetch('/api/documents/ingest', {
+            method: 'POST',
+            headers: { 'X-CSRF-TOKEN': requestToken },
+            body: form,
+            signal: controller.signal,
+          })
+
+          if (response.status === 409) {
+            outcome = { fileName, status: 'duplicate', message: 'An identical file is already in the archive.' }
+          } else if (response.ok) {
+            const created = await response.json() as Receipt
+            lastImportedId = created.id
+            outcome = { fileName, status: 'imported', message: 'Added to the review queue.' }
+          } else {
+            throw await responseError(response)
+          }
+        } catch (requestError) {
+          if (controller.signal.aborted) {
+            outcome = {
+              fileName,
+              status: 'cancelled',
+              message: 'Request cancelled; check the archive because the server may have completed it.',
+            }
+            outcomes.push(outcome)
+            for (const unprocessed of supportedFiles.slice(index + 1)) {
+              outcomes.push({
+                fileName: unprocessed.webkitRelativePath || unprocessed.name,
+                status: 'cancelled',
+                message: 'Not uploaded because the folder import was cancelled.',
+              })
+            }
+            break
+          }
+
+          outcome = {
+            fileName,
+            status: 'failed',
+            message: requestError instanceof Error ? requestError.message : 'Could not upload this file.',
+          }
+        }
+
+        outcomes.push(outcome)
+        setFolderImport({
+          totalFiles: files.length,
+          outcomes: [...outcomes],
+          currentFile: null,
+          running: true,
+          cancelled: controller.signal.aborted,
+        })
+      }
+
+      try {
+        await refreshQueue(lastImportedId)
+      } catch (refreshError) {
+        setError(refreshError instanceof Error
+          ? `Folder import finished, but the review queue could not be refreshed: ${refreshError.message}`
+          : 'Folder import finished, but the review queue could not be refreshed.')
+      }
+      setFolderImport({
+        totalFiles: files.length,
+        outcomes: [...outcomes],
+        currentFile: null,
+        running: false,
+        cancelled: controller.signal.aborted,
+      })
+    } finally {
+      folderImportController.current = null
       setUploading(false)
     }
   }
@@ -402,17 +541,58 @@ function ReviewDesk() {
             <p className="eyebrow">{view === 'home' ? 'RENOVATION ARCHIVE' : 'DOCUMENTS'}</p>
             <h1 id="page-title">{pageTitle}</h1>
           </div>
-          {view === 'review' && <div className="queue-summary" aria-label={`${receipts.length} receipts awaiting review`}>
-            <strong>{receipts.length.toString().padStart(2, '0')}</strong>
-            <span>in queue</span>
-            <i />
-            <strong>{pendingCount.toString().padStart(2, '0')}</strong>
-            <span>new</span>
+          {view === 'review' && <div className="review-actions">
+            <label className={`folder-import-button${uploading ? ' is-busy' : ''}`}>
+              <FolderOpen size={15} aria-hidden="true" />
+              <span>Import folder</span>
+              <input
+                ref={configureFolderInput}
+                type="file"
+                multiple
+                onChange={(event) => void importFolder(event)}
+                disabled={uploading || !requestToken}
+                aria-label="Select a folder to import receipts from"
+              />
+            </label>
+            <div className="queue-summary" aria-label={`${receipts.length} receipts awaiting review`}>
+              <strong>{receipts.length.toString().padStart(2, '0')}</strong>
+              <span>in queue</span>
+              <i />
+              <strong>{pendingCount.toString().padStart(2, '0')}</strong>
+              <span>new</span>
+            </div>
           </div>}
         </section>
 
         {error && <div className="message message-error" role="alert">{error}</div>}
         {notice && <div className="message message-success" role="status">{notice}</div>}
+        {view === 'review' && folderImport && <section className="folder-import-report" aria-label="Folder import results">
+          <div className="folder-import-heading">
+            <div>
+              <h2>{folderImport.cancelled ? 'Folder import cancelled' : folderImport.running ? 'Importing folder' : 'Folder import complete'}</h2>
+              <p role="status">{folderImport.outcomes.length} of {folderImport.totalFiles} files processed
+                {folderImport.currentFile ? ` · ${folderImport.currentFile}` : ''}
+              </p>
+            </div>
+            {folderImport.running && <button className="text-button" type="button" onClick={() => folderImportController.current?.abort()}>Cancel import</button>}
+          </div>
+          <progress max={folderImport.totalFiles} value={folderImport.outcomes.length} aria-label="Folder import progress" />
+          <p className="folder-import-counts">
+            {folderImport.outcomes.filter((outcome) => outcome.status === 'imported').length} imported ·{' '}
+            {folderImport.outcomes.filter((outcome) => outcome.status === 'duplicate').length} already present ·{' '}
+            {folderImport.outcomes.filter((outcome) => outcome.status === 'skipped').length} skipped ·{' '}
+            {folderImport.outcomes.filter((outcome) => outcome.status === 'failed').length} failed ·{' '}
+            {folderImport.outcomes.filter((outcome) => outcome.status === 'cancelled').length} not uploaded
+          </p>
+          {folderImport.outcomes.length > 0 && <details>
+            <summary>File results ({folderImport.outcomes.length})</summary>
+            <ul>{folderImport.outcomes.map((outcome, index) => (
+              <li className={`folder-import-${outcome.status}`} key={`${outcome.fileName}-${index}`}>
+                <span>{outcome.fileName}</span><span>{outcome.message}</span>
+              </li>
+            ))}</ul>
+          </details>}
+        </section>}
 
         <section className="question-panel question-home" aria-label="Ask questions about receipts" hidden={view !== 'home'}>
           <form className="question-form" onSubmit={(event) => void askReceipts(event)}>
