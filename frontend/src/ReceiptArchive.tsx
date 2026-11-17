@@ -226,7 +226,7 @@ function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: 
                 <thead><tr><th scope="col">Receipt</th><th scope="col">Date</th><th scope="col">Projects</th><th scope="col">Receipt total</th><th scope="col">Status</th></tr></thead>
                 <tbody>{receipts.map((receipt) => <tr key={receipt.id} className={selected?.id === receipt.id ? 'is-selected' : ''}>
                   <td><button className="archive-receipt-link" type="button" onClick={(event) => { triggerRef.current = event.currentTarget; setSelected(receipt) }} aria-label={`Open receipt ${receipt.vendor || receipt.fileName}`}>
-                    <FileText size={19} aria-hidden="true" /><span><strong>{receipt.vendor || 'Vendor not set'}</strong><small>{receipt.fileName}</small></span>
+                    <span><strong>{receipt.vendor || 'Vendor not set'}</strong><small>{receipt.fileName}</small></span>
                   </button></td>
                   <td>{receipt.documentDate ?? 'Not set'}</td>
                   <td>{receiptProjects(receipt)}</td>

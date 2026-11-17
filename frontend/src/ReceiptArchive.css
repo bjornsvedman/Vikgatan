@@ -32,9 +32,8 @@
 .archive-table th:nth-child(3) { width: 18%; }
 .archive-table th:nth-child(4) { width: 18%; }
 .archive-table tr.is-selected { background: var(--green-pale); }
-.archive-receipt-link { display: flex; align-items: center; gap: 9px; max-width: 100%; padding: 0; color: var(--forest); border: 0; background: transparent; text-align: left; }
+.archive-receipt-link { display: flex; align-items: center; max-width: 100%; padding: 0; color: var(--forest); border: 0; background: transparent; text-align: left; }
 .archive-receipt-link:hover strong { text-decoration: underline; }
-.archive-receipt-link svg { flex: 0 0 19px; }
 .archive-receipt-link span { min-width: 0; }
 .archive-receipt-link strong, .archive-receipt-link small { display: block; overflow-wrap: anywhere; }
 .archive-receipt-link small { margin-top: 5px; color: var(--muted); font-size: 10px; }
