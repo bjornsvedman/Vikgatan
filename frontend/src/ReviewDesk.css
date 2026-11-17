@@ -884,6 +884,17 @@ h3 {
   object-fit: contain;
 }
 
+.document-preview-image {
+  display: block;
+  overflow: auto;
+}
+
+.document-preview-image img {
+  display: block;
+  height: auto;
+  object-fit: initial;
+}
+
 .document-processing-error {
   margin: 14px 0 0;
 }

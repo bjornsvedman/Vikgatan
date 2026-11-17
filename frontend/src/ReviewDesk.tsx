@@ -892,7 +892,7 @@ function ReviewDesk() {
                   </span>
                 </div>
 
-                <div className="document-preview">
+                <div className={`document-preview${selectedReceipt.fileName.toLowerCase().endsWith('.pdf') ? '' : ' document-preview-image'}`}>
                   {selectedReceipt.fileName.toLowerCase().endsWith('.pdf') ? (
                     <iframe
                       src={`/api/documents/${selectedReceipt.id}/file`}
