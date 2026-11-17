@@ -1,0 +1,9 @@
+.project-select { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
+.project-select label, .project-manager label { display: flex; flex-direction: column; gap: .3rem; }
+.project-select input, .project-select select, .project-manager input, .project-manager select {
+  max-width: 100%; padding: .5rem; border: 1px solid #ccd5ce; border-radius: 4px; background: white; color: inherit;
+}
+.project-manager { margin: 1rem 0; }
+.project-manager fieldset { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
+.project-summary { padding: .75rem 0; }
+.line-item-row .project-select { grid-column: 1 / -1; }

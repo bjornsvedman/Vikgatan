@@ -11,7 +11,8 @@ namespace InvoiceManager.Api.Services;
 
 public sealed class ExpenseReportService(InvoiceDbContext dbContext)
 {
-    public async Task<ExpenseReportResponse?> GenerateAsync(Guid propertyId, CancellationToken cancellationToken)
+    public async Task<ExpenseReportResponse?> GenerateAsync(Guid propertyId, CancellationToken cancellationToken,
+        Guid? projectId = null, bool unassignedProject = false)
     {
         if (propertyId == Guid.Empty) throw new ArgumentException("A non-empty propertyId is required.");
         await using var transaction = dbContext.Database.CurrentTransaction is null
@@ -20,8 +21,15 @@ public sealed class ExpenseReportService(InvoiceDbContext dbContext)
         var property = await dbContext.Properties.AsNoTracking().SingleOrDefaultAsync(
             item => item.Id == propertyId, cancellationToken);
         if (property is null) return null;
-        var receipts = await dbContext.Receipts.AsNoTracking().Include(receipt => receipt.ImprovementExpenses)
-            .Where(receipt => receipt.PropertyId == propertyId).OrderBy(receipt => receipt.Id)
+        await ProjectScope.ValidateAsync(dbContext, propertyId, projectId, unassignedProject, cancellationToken);
+        var scopeName = projectId is Guid id
+            ? await dbContext.Projects.Where(project => project.Id == id && project.PropertyId == propertyId)
+                .Select(project => project.Name).SingleAsync(cancellationToken)
+            : unassignedProject ? "Unassigned" : null;
+        var receipts = await ProjectScope.Apply(dbContext.Receipts.AsNoTracking()
+            .Include(receipt => receipt.LineItems).ThenInclude(item => item.Project)
+            .Include(receipt => receipt.ImprovementExpenses)
+            .Where(receipt => receipt.PropertyId == propertyId), projectId, unassignedProject).OrderBy(receipt => receipt.Id)
             .ToListAsync(cancellationToken);
         var eligible = new List<ImprovementExpense>();
         var unresolved = new List<UnresolvedExpenseReceipt>();
@@ -33,7 +41,8 @@ public sealed class ExpenseReportService(InvoiceDbContext dbContext)
             {
                 unresolved.Add(new(receipt.Id, receipt.FileName, receipt.Vendor, receipt.Currency, reasons,
                     receipt.ImprovementExpenses.OrderBy(expense => expense.Id)
-                        .Select(ReceiptResponseMapper.ToExpenseResponse).ToArray()));
+                        .Select(ReceiptResponseMapper.ToExpenseResponse).ToArray())
+                { SourceProjects = ProjectScope.Names(receipt) });
                 continue;
             }
             confirmedReceipts++;
@@ -49,10 +58,12 @@ public sealed class ExpenseReportService(InvoiceDbContext dbContext)
                 Amount(group.Sum(expense => expense.Amount!.Value)))).ToArray();
         var report = new ExpenseReportResponse(property.Id, property.Name,
             new(property.PropertyType, property.AcquisitionDate, property.SaleDate), DateTimeOffset.UtcNow,
-            "expense-summary-v1", "SEK", receipts.Count, confirmedReceipts,
+            "expense-summary-v2", "SEK", receipts.Count, confirmedReceipts,
             included.Select(Row).ToArray(), excluded.Select(Row).ToArray(), unresolved, totals,
             Amount(included.Sum(expense => expense.Amount!.Value)),
-            Amount(excluded.Sum(expense => expense.Amount!.Value)), "");
+            Amount(excluded.Sum(expense => expense.Amount!.Value)), "")
+        { ScopeNotice = scopeName is null ? null
+            : $"Receipts containing {scopeName} items (including no-item receipts for Unassigned). Coverage is within this receipt scope. Amounts below are whole classified expense amounts, not project-only spending." };
         return report with { Html = Render(report) };
     }
 
@@ -69,7 +80,8 @@ public sealed class ExpenseReportService(InvoiceDbContext dbContext)
     private static ExpenseReportRow Row(ImprovementExpense expense) => new(
         expense.ReceiptId, expense.Id, expense.Receipt.FileName, expense.Receipt.Vendor,
         expense.ExpenseDate!.Value, expense.Description, Label(expense.Type), Amount(expense.Amount!.Value),
-        expense.WorkDetails, expense.ExclusionReason, expense.Notes);
+        expense.WorkDetails, expense.ExclusionReason, expense.Notes)
+    { SourceProjects = ProjectScope.Names(expense.Receipt) };
 
     private static string Render(ExpenseReportResponse report)
     {
@@ -92,6 +104,7 @@ public sealed class ExpenseReportService(InvoiceDbContext dbContext)
             adjustments on the original invoice. Do not transfer these totals directly into a tax declaration.</p>
             """);
         html.Append($"<h2>{E(report.PropertyName)}</h2><p>Generated: {E(report.GeneratedAtUtc.ToString("O"))} · {E(report.FormatVersion)} · SEK only</p>");
+        if (report.ScopeNotice is not null) html.Append($"<p class=\"notice\">{E(report.ScopeNotice)}</p>");
         html.Append($"<p>Property type: {E(report.SaleFacts.PropertyType)} · Acquired: {Date(report.SaleFacts.AcquisitionDate)} · Sold: {Date(report.SaleFacts.SaleDate)}</p>");
         html.Append($"<h2>Coverage</h2><p>{report.ConfirmedReceiptCount} of {report.ReceiptCount} receipts fully confirmed and reconciled. {report.Unresolved.Count} unresolved receipts omitted from confirmed totals.</p>");
         if (report.ConfirmedReceiptCount == 0) html.Append("<p><strong>No confirmed receipt amounts are included.</strong></p>");
@@ -109,7 +122,7 @@ public sealed class ExpenseReportService(InvoiceDbContext dbContext)
             {
                 html.Append($"<h3>{group.Key.Year} — {E(group.Key.Classification)}</h3><table><thead><tr><th>Date / expense</th><th>Amount (SEK)</th><th>Source / evidence</th></tr></thead><tbody>");
                 foreach (var row in group)
-                    html.Append($"<tr><td>{Date(row.ExpenseDate)}<br>{E(row.Description)}<br>{E(row.WorkDetails ?? row.ExclusionReason)}<br>Notes: {E(row.Notes)}</td><td>{row.Amount}</td><td>{E(row.Vendor)}<br>{E(row.FileName)}<div class=\"reference\">Receipt: {row.ReceiptId}<br>Expense portion: {row.PortionId}</div></td></tr>");
+                    html.Append($"<tr><td>{Date(row.ExpenseDate)}<br>{E(row.Description)}<br>{E(row.WorkDetails ?? row.ExclusionReason)}<br>Notes: {E(row.Notes)}</td><td>{row.Amount}</td><td>{E(row.Vendor)}<br>{E(row.FileName)}<br>Source receipt projects: {E(string.Join(", ", row.SourceProjects))}<div class=\"reference\">Receipt: {row.ReceiptId}<br>Expense portion: {row.PortionId}</div></td></tr>");
                 html.Append("</tbody></table>");
             }
         }
@@ -119,7 +132,7 @@ public sealed class ExpenseReportService(InvoiceDbContext dbContext)
         if (report.Unresolved.Count == 0) html.Append("<p>No unresolved receipts. Tax eligibility remains unassessed.</p>");
         foreach (var item in report.Unresolved)
         {
-            html.Append($"<h3>{E(item.Vendor ?? item.FileName)}</h3><p>{E(item.FileName)} · Receipt: {item.ReceiptId} · Stored currency: {E(item.Currency)}</p><ul>");
+            html.Append($"<h3>{E(item.Vendor ?? item.FileName)}</h3><p>{E(item.FileName)} · Receipt: {item.ReceiptId} · Stored currency: {E(item.Currency)}<br>Source receipt projects: {E(string.Join(", ", item.SourceProjects))}</p><ul>");
             foreach (var reason in item.Reasons) html.Append($"<li>{E(reason)}</li>");
             html.Append("</ul>");
             foreach (var portion in item.Portions)

@@ -9,7 +9,6 @@ public sealed record ExtractedReceipt(
     [property: JsonPropertyName("document_date")] string? DocumentDate,
     [property: JsonPropertyName("currency")] string? Currency,
     [property: JsonPropertyName("total_amount")] decimal? TotalAmount,
-    [property: JsonPropertyName("category")] string? Category,
     [property: JsonPropertyName("description")] string? Description,
     [property: JsonPropertyName("line_items")] IReadOnlyList<ExtractedReceiptLineItem>? LineItems,
     [property: JsonPropertyName("expense_suggestions")] IReadOnlyList<ExtractedExpenseSuggestion>? ExpenseSuggestions = null);
@@ -25,5 +24,4 @@ public sealed record ExtractedReceiptLineItem(
     [property: JsonPropertyName("description")] string? Description,
     [property: JsonPropertyName("quantity")] decimal? Quantity,
     [property: JsonPropertyName("unit_price")] decimal? UnitPrice,
-    [property: JsonPropertyName("line_total")] decimal? LineTotal,
-    [property: JsonPropertyName("category")] string? Category);
+    [property: JsonPropertyName("line_total")] decimal? LineTotal);

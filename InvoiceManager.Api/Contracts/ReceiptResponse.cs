@@ -11,7 +11,6 @@ public sealed record ReceiptResponse(
     string? Vendor,
     string? Currency,
     decimal? TotalAmount,
-    string? Category,
     string? Description,
     ReceiptProcessingStatus Status,
     string? ProcessingError,
@@ -31,5 +30,11 @@ public sealed record ReceiptLineItemResponse(
     string Description,
     decimal? Quantity,
     decimal? UnitPrice,
-    decimal? LineTotal,
-    string? Category);
+    decimal? LineTotal)
+{
+    public Guid? ProjectId { get; init; }
+    public string? ProjectName { get; init; }
+    public string? LineTotalExact { get; init; }
+    public string? QuantityExact { get; init; }
+    public string? UnitPriceExact { get; init; }
+}

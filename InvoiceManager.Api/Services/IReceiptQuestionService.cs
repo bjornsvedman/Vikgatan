@@ -7,5 +7,7 @@ public interface IReceiptQuestionService
     Task<ReceiptQuestionResponse> QueryAsync(
         string question,
         CancellationToken cancellationToken,
-        Guid propertyId);
+        Guid propertyId,
+        Guid? projectId = null,
+        bool unassignedProject = false);
 }

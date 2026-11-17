@@ -4,4 +4,6 @@ namespace InvoiceManager.Api.Contracts;
 public sealed record ReceiptQuestionRequest
 {
     public required string Question { get; init; }
+    public Guid? ProjectId { get; init; }
+    public bool UnassignedProject { get; init; }
 }

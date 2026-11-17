@@ -18,19 +18,21 @@ public sealed class FoundryReceiptQueryPlanner(
             "query_type": { "type": "string", "enum": ["semantic", "sum_total"] },
             "year": { "type": ["integer", "null"] },
             "vendor": { "type": ["string", "null"] },
-            "category": { "type": ["string", "null"] },
-            "group_by": { "type": "string", "enum": ["none", "year", "vendor", "category"] }
+            "group_by": { "type": "string", "enum": ["none", "year", "vendor", "project"] },
+            "project": { "type": ["string", "null"] }
           },
-          "required": ["query_type", "year", "vendor", "category", "group_by"],
+          "required": ["query_type", "year", "vendor", "group_by", "project"],
           "additionalProperties": false
         }
         """;
 
     private const string Instructions = """
         Classify the user's receipt question. Use sum_total for exact spending, amount, or total-cost
-        questions; use group_by=year, vendor, or category when a breakdown is requested, otherwise group_by=none.
-        Populate year/vendor/category only when the user explicitly specifies them. Use semantic for descriptive
+        questions; use group_by=year, vendor, or project when a breakdown is requested, otherwise group_by=none.
+        Populate year/vendor only when the user explicitly specifies them. Use semantic for descriptive
         or item-discovery questions. Never calculate an amount and never return SQL.
+        Set project only when a project name is explicitly mentioned (without the word project).
+        Use group_by=project for a breakdown by project. Never invent or infer project names.
         """;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);

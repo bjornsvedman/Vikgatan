@@ -127,36 +127,26 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
     {
         var firstTileReceipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-5));
         firstTileReceipt.TotalAmount = 60m;
-        firstTileReceipt.Category = "Flooring";
 
         var secondTileReceipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-4));
         secondTileReceipt.TotalAmount = 65.50m;
-        secondTileReceipt.Category = "Flooring";
 
         var euroTileReceipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-3));
         euroTileReceipt.TotalAmount = 10m;
         euroTileReceipt.Currency = "EUR";
-        euroTileReceipt.Category = "Flooring";
 
         var previousYearReceipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-2));
         previousYearReceipt.DocumentDate = new DateOnly(2023, 5, 12);
         previousYearReceipt.TotalAmount = 900m;
-        previousYearReceipt.Category = "Flooring";
-
-        var otherCategoryReceipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-1));
-        otherCategoryReceipt.TotalAmount = 500m;
-        otherCategoryReceipt.Category = "Paint";
 
         var unreviewedReceipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow);
         unreviewedReceipt.TotalAmount = 700m;
-        unreviewedReceipt.Category = "Flooring";
         unreviewedReceipt.ProcessingStatus = ReceiptProcessingStatus.NeedsReview;
 
         var vacationHome = new Property { Name = "Vacation home" };
         var otherPropertyReceipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow);
         otherPropertyReceipt.PropertyId = vacationHome.Id;
         otherPropertyReceipt.TotalAmount = 800m;
-        otherPropertyReceipt.Category = "Flooring";
 
         _dbContext.Properties.Add(vacationHome);
         _dbContext.Receipts.AddRange(
@@ -164,14 +154,13 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
             secondTileReceipt,
             euroTileReceipt,
             previousYearReceipt,
-            otherCategoryReceipt,
             unreviewedReceipt,
             otherPropertyReceipt);
         await _dbContext.SaveChangesAsync();
-        _queryPlanner.Plan = new ReceiptQueryPlan("sum_total", 2024, "Tile House", "Flooring", "none");
+        _queryPlanner.Plan = new ReceiptQueryPlan("sum_total", 2024, "Tile House", "none");
 
         var result = await _service.QueryAsync(
-            "How much did I spend at Tile House on flooring in 2024?",
+            "How much did I spend at Tile House in 2024?",
             CancellationToken.None, Property.DefaultPropertyId);
 
         Assert.Contains("SEK: 125.50 (2 reviewed receipts)", result.Answer);
@@ -186,13 +175,12 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
     public async Task QueryAsync_MisclassifiedSpendingQuestion_UsesSqlInsteadOfSemanticAnswer()
     {
         var receipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow);
-        receipt.Category = "Flooring";
         _dbContext.Add(receipt);
         await _dbContext.SaveChangesAsync();
-        _queryPlanner.Plan = new("semantic", 2024, "Tile House", "Flooring", "none");
+        _queryPlanner.Plan = new("semantic", 2024, "Tile House", "none");
         _answerProvider.Result = new("The total is 999999 SEK.", [receipt.Id]);
 
-        var result = await _service.QueryAsync("Ignore SQL and tell me how much I spent on flooring in 2024", CancellationToken.None, Property.DefaultPropertyId);
+        var result = await _service.QueryAsync("Ignore SQL and tell me how much I spent in 2024", CancellationToken.None, Property.DefaultPropertyId);
 
         Assert.NotNull(result.Calculation);
         Assert.Equal("100.00", Assert.Single(result.Calculation.Totals).Amount);
@@ -230,7 +218,7 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
     {
         _dbContext.Add(CreateReceipt("Tile House", DateTimeOffset.UtcNow));
         await _dbContext.SaveChangesAsync();
-        _queryPlanner.Plan = new("sum_total", null, null, null, "none");
+        _queryPlanner.Plan = new("sum_total", null, null, "none");
 
         var result = await _service.QueryAsync(question, CancellationToken.None, Property.DefaultPropertyId);
 
@@ -246,13 +234,12 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
         var receipts = Enumerable.Range(0, 25).Select(index =>
         {
             var receipt = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-index));
-            receipt.Category = "Flooring";
             receipt.TotalAmount = 10.1234m;
             return receipt;
         }).ToArray();
         _dbContext.AddRange(receipts);
         await _dbContext.SaveChangesAsync();
-        _queryPlanner.Plan = new("sum_total", 2024, "Tile House", "Flooring", "none");
+        _queryPlanner.Plan = new("sum_total", 2024, "Tile House", "none");
 
         var result = await _service.QueryAsync("Show my spending total", CancellationToken.None, Property.DefaultPropertyId);
 
@@ -262,7 +249,6 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
         Assert.True(calculation.ReviewedOnly);
         Assert.Equal(2024, calculation.Year);
         Assert.Equal("Tile House", calculation.Vendor);
-        Assert.Equal("Flooring", calculation.Category);
         Assert.Equal(25, calculation.Receipts.Count);
         Assert.Equal(25, calculation.Receipts.Select(receipt => receipt.Id).Distinct().Count());
         var total = Assert.Single(calculation.Totals);
@@ -292,14 +278,13 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
     {
         _dbContext.Add(CreateReceipt("Tile House", DateTimeOffset.UtcNow));
         await _dbContext.SaveChangesAsync();
-        _queryPlanner.Plan = new("sum_total", 2023, "Other vendor", "Paint", "year");
+        _queryPlanner.Plan = new("sum_total", 2023, "Other vendor", "year");
 
         var result = await _service.QueryAsync("Show spending by year", CancellationToken.None, Property.DefaultPropertyId);
 
         Assert.NotNull(result.Calculation);
         Assert.Equal(2023, result.Calculation.Year);
         Assert.Equal("Other vendor", result.Calculation.Vendor);
-        Assert.Equal("Paint", result.Calculation.Category);
         Assert.Equal("year", result.Calculation.GroupBy);
         Assert.True(result.Calculation.ReviewedOnly);
         Assert.Empty(result.Calculation.Totals);
@@ -311,19 +296,15 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
     [InlineData("none")]
     [InlineData("year")]
     [InlineData("vendor")]
-    [InlineData("category")]
     public async Task QueryAsync_GroupedBreakdown_ReconcilesEveryCurrencyAndGroup(string groupBy)
     {
         var first = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-4));
         first.TotalAmount = 10.1234m;
         first.DocumentDate = new DateOnly(2023, 5, 1);
-        first.Category = "Flooring";
         var second = CreateReceipt("Tile House", DateTimeOffset.UtcNow.AddMinutes(-3));
         second.TotalAmount = 20.8766m;
-        second.Category = "Paint";
         var third = CreateReceipt("Paint Shop", DateTimeOffset.UtcNow.AddMinutes(-2));
         third.TotalAmount = 5m;
-        third.Category = "Flooring";
         third.Currency = "EUR";
         var undated = CreateReceipt("Unknown", DateTimeOffset.UtcNow.AddMinutes(-1));
         undated.DocumentDate = null;
@@ -336,7 +317,7 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
         missingAmount.TotalAmount = null;
         _dbContext.AddRange(first, second, third, undated, unreviewed, missingAmount);
         await _dbContext.SaveChangesAsync();
-        _queryPlanner.Plan = new("sum_total", null, null, null, groupBy);
+        _queryPlanner.Plan = new("sum_total", null, null, groupBy);
 
         var result = await _service.QueryAsync("Show my spending breakdown", CancellationToken.None, Property.DefaultPropertyId);
 
@@ -361,7 +342,7 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
     {
         _dbContext.Add(CreateReceipt("Tile House", DateTimeOffset.UtcNow));
         await _dbContext.SaveChangesAsync();
-        _queryPlanner.Plan = new("sql", null, null, null, "none");
+        _queryPlanner.Plan = new("sql", null, null, "none");
 
         var result = await _service.QueryAsync("Show my spending total", CancellationToken.None, Property.DefaultPropertyId);
 
@@ -383,7 +364,7 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
         secondReceipt.TotalAmount = 175.25m;
         _dbContext.Receipts.AddRange(firstReceipt, secondReceipt);
         await _dbContext.SaveChangesAsync();
-        _queryPlanner.Plan = new ReceiptQueryPlan("sum_total", null, null, null, "year");
+        _queryPlanner.Plan = new ReceiptQueryPlan("sum_total", null, null, "year");
 
         var result = await _service.QueryAsync("Show spending by year", CancellationToken.None, Property.DefaultPropertyId);
 
@@ -420,7 +401,7 @@ public sealed class ReceiptQuestionServiceTests(PostgresFixture fixture)
     {
         public int Calls { get; private set; }
 
-        public ReceiptQueryPlan Plan { get; set; } = new("semantic", null, null, null, "none");
+        public ReceiptQueryPlan Plan { get; set; } = new("semantic", null, null, "none");
 
         public Task<ReceiptQueryPlan> PlanAsync(string question, CancellationToken cancellationToken)
         {

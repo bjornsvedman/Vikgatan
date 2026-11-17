@@ -19,7 +19,6 @@ public sealed class FoundryReceiptExtractionProvider(
             "document_date": { "type": ["string", "null"] },
             "currency": { "type": ["string", "null"] },
             "total_amount": { "type": ["number", "null"] },
-            "category": { "type": ["string", "null"] },
             "description": { "type": ["string", "null"] },
             "expense_suggestions": {
               "type": "array",
@@ -44,15 +43,14 @@ public sealed class FoundryReceiptExtractionProvider(
                   "description": { "type": ["string", "null"] },
                   "quantity": { "type": ["number", "null"] },
                   "unit_price": { "type": ["number", "null"] },
-                  "line_total": { "type": ["number", "null"] },
-                  "category": { "type": ["string", "null"] }
+                  "line_total": { "type": ["number", "null"] }
                 },
-                "required": ["description", "quantity", "unit_price", "line_total", "category"],
+                "required": ["description", "quantity", "unit_price", "line_total"],
                 "additionalProperties": false
               }
             }
           },
-          "required": ["vendor", "document_date", "currency", "total_amount", "category", "description", "line_items", "expense_suggestions"],
+          "required": ["vendor", "document_date", "currency", "total_amount", "description", "line_items", "expense_suggestions"],
           "additionalProperties": false
         }
         """;

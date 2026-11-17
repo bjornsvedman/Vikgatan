@@ -75,7 +75,7 @@ public sealed class ReceiptIngestionService(
 
         var existingReceipt = await dbContext.Receipts
             .AsNoTracking()
-            .Include(receipt => receipt.LineItems)
+            .Include(receipt => receipt.LineItems).ThenInclude(item => item.Project)
             .SingleOrDefaultAsync(
                 receipt => receipt.PropertyId == property.Id && receipt.ContentHash == contentHash,
                 cancellationToken);
@@ -127,7 +127,7 @@ public sealed class ReceiptIngestionService(
 
             var concurrentDuplicate = await dbContext.Receipts
                 .AsNoTracking()
-                .Include(item => item.LineItems)
+                .Include(item => item.LineItems).ThenInclude(item => item.Project)
                 .SingleOrDefaultAsync(
                     item => item.PropertyId == property.Id && item.ContentHash == contentHash,
                     cancellationToken);
@@ -157,7 +157,7 @@ public sealed class ReceiptIngestionService(
     {
         var receipt = await dbContext.Receipts
             .AsNoTracking()
-            .Include(item => item.LineItems)
+            .Include(item => item.LineItems).ThenInclude(item => item.Project)
             .Include(item => item.ImprovementExpenses)
             .SingleOrDefaultAsync(item => item.Id == id, cancellationToken);
 
@@ -246,7 +246,6 @@ public sealed class ReceiptIngestionService(
             ? currency.ToUpperInvariant()
             : null;
         receipt.TotalAmount = IsValidAmount(metadata.TotalAmount) ? metadata.TotalAmount : null;
-        receipt.Category = ValidText(metadata.Category, 128);
         receipt.Description = ValidText(metadata.Description, 4000);
         receipt.ExtractedMetadataJson = extraction.RawJson;
         receipt.LineItems.Clear();
@@ -262,11 +261,11 @@ public sealed class ReceiptIngestionService(
             dbContext.ReceiptLineItems.Add(new ReceiptLineItem
             {
                 ReceiptId = receipt.Id,
+                PropertyId = receipt.PropertyId,
                 Description = description,
                 Quantity = IsValidAmount(item.Quantity) ? item.Quantity : null,
                 UnitPrice = IsValidAmount(item.UnitPrice) ? item.UnitPrice : null,
-                LineTotal = IsValidAmount(item.LineTotal) ? item.LineTotal : null,
-                Category = ValidText(item.Category, 128)
+                LineTotal = IsValidAmount(item.LineTotal) ? item.LineTotal : null
             });
         }
     }
@@ -303,11 +302,6 @@ public sealed class ReceiptIngestionService(
         if (receipt.DocumentDate is not null)
         {
             sections.Add($"Document date: {receipt.DocumentDate:yyyy-MM-dd}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(receipt.Category))
-        {
-            sections.Add($"Category: {receipt.Category}");
         }
 
         if (!string.IsNullOrWhiteSpace(receipt.Description))

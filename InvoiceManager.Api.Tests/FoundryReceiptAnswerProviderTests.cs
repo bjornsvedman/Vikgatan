@@ -41,7 +41,6 @@ public sealed class FoundryReceiptAnswerProviderTests
                 new DateOnly(2024, 5, 12),
                 "SEK",
                 125.50m,
-                "Flooring",
                 "Kitchen tiles",
                 "Completed",
                 [])],

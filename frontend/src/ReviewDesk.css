@@ -998,9 +998,36 @@ h3 {
   gap: 10px;
 }
 
+.receipt-wide-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 16px;
+  margin: 10px 0 18px;
+}
+
+.receipt-classification-type {
+  margin: 0;
+}
+
+.receipt-classification-type select {
+  min-height: 36px;
+  padding: 7px 9px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+@media (max-width: 700px) {
+  .receipt-wide-choices {
+    grid-template-columns: 1fr;
+  }
+}
+
 .line-item-row {
   display: grid;
-  grid-template-columns: minmax(110px, 2fr) minmax(55px, 0.55fr) minmax(80px, 0.8fr) minmax(90px, 0.9fr) minmax(80px, 0.8fr) auto;
+  grid-template-columns: minmax(0, 2fr) minmax(55px, 0.55fr) minmax(80px, 0.8fr) minmax(90px, 0.9fr) auto;
   align-items: end;
   gap: 10px;
   padding-bottom: 10px;
@@ -1228,9 +1255,6 @@ h3 {
 
   .line-description,
   .line-unit-price,
-  .line-category {
-    grid-column: 1 / -1;
-  }
 
   .remove-button {
     justify-self: end;

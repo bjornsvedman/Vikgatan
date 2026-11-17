@@ -225,7 +225,14 @@ public static class ReceiptEndpoints
                 title: "A question between 1 and 2000 characters is required.");
         }
 
-        var result = await questionService.QueryAsync(request.Question, cancellationToken, propertyId);
-        return TypedResults.Ok(result);
+        try
+        {
+            return TypedResults.Ok(await questionService.QueryAsync(request.Question, cancellationToken, propertyId,
+                request.ProjectId, request.UnassignedProject));
+        }
+        catch (ArgumentException exception)
+        {
+            return TypedResults.Problem(statusCode: 400, title: "Invalid project scope.", detail: exception.Message);
+        }
     }
 }

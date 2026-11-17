@@ -10,8 +10,8 @@ public sealed record ReceiptQueryPlan(
     [property: JsonPropertyName("query_type")] string QueryType,
     [property: JsonPropertyName("year")] int? Year,
     [property: JsonPropertyName("vendor")] string? Vendor,
-    [property: JsonPropertyName("category")] string? Category,
-    [property: JsonPropertyName("group_by")] string GroupBy);
+    [property: JsonPropertyName("group_by")] string GroupBy,
+    [property: JsonPropertyName("project")] string? Project = null);
 
 public sealed record ReceiptQuestionDocument(
     Guid Id,
@@ -20,7 +20,6 @@ public sealed record ReceiptQuestionDocument(
     DateOnly? DocumentDate,
     string? Currency,
     decimal? TotalAmount,
-    string? Category,
     string? Description,
     string Status,
     IReadOnlyList<ReceiptQuestionLineItem> LineItems);
@@ -29,5 +28,4 @@ public sealed record ReceiptQuestionLineItem(
     string Description,
     decimal? Quantity,
     decimal? UnitPrice,
-    decimal? LineTotal,
-    string? Category);
+    decimal? LineTotal);

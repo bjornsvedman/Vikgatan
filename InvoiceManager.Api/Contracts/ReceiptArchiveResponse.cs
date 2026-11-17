@@ -7,6 +7,8 @@ public sealed record ReceiptArchiveResponse(
     int Page,
     int PageSize,
     IReadOnlyList<int> Years,
-    IReadOnlyList<string> Categories,
     IReadOnlyList<string> Vendors,
-    IReadOnlyList<string> Currencies);
+    IReadOnlyList<string> Currencies)
+{
+    public IReadOnlyList<Services.ProjectResponse> Projects { get; init; } = [];
+}

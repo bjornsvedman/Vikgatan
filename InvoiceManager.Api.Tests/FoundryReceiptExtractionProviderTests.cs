@@ -14,7 +14,7 @@ public sealed class FoundryReceiptExtractionProviderTests
     public async Task ExtractAsync_Pdf_UsesResponsesApiAndParsesStructuredMetadata()
     {
         const string output = """
-            {"vendor":"Tile House","document_date":"2024-05-12","currency":"SEK","total_amount":125.5,"category":"Flooring","description":"Kitchen tiles","line_items":[],"expense_suggestions":[{"description":"Kitchen tiles","type":"Unclassified","amount":125.5,"evidence":"Tiles purchase line","uncertainty":"Previous material and use are unknown"}]}
+            {"vendor":"Tile House","document_date":"2024-05-12","currency":"SEK","total_amount":125.5,"description":"Kitchen tiles","line_items":[],"expense_suggestions":[{"description":"Kitchen tiles","type":"Unclassified","amount":125.5,"evidence":"Tiles purchase line","uncertainty":"Previous material and use are unknown"}]}
             """;
         var handler = new StubHttpMessageHandler(new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -45,6 +45,9 @@ public sealed class FoundryReceiptExtractionProviderTests
         Assert.Equal("input_file", content[1].GetProperty("type").GetString());
         Assert.StartsWith("data:application/pdf;base64,", content[1].GetProperty("file_data").GetString());
         Assert.True(body.RootElement.GetProperty("text").GetProperty("format").GetProperty("strict").GetBoolean());
+        var properties = body.RootElement.GetProperty("text").GetProperty("format").GetProperty("schema").GetProperty("properties");
+        Assert.False(properties.TryGetProperty("category", out _));
+        Assert.False(properties.GetProperty("line_items").GetProperty("items").GetProperty("properties").TryGetProperty("category", out _));
         Assert.Contains("Never approve", content[0].GetProperty("text").GetString());
     }
 

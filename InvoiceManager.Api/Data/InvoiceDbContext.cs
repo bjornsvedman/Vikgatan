@@ -14,6 +14,7 @@ public sealed class InvoiceDbContext(DbContextOptions<InvoiceDbContext> options)
     public DbSet<Property> Properties => Set<Property>();
 
     public DbSet<ImprovementExpense> ImprovementExpenses => Set<ImprovementExpense>();
+    public DbSet<Project> Projects => Set<Project>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -33,7 +34,6 @@ public sealed class InvoiceDbContext(DbContextOptions<InvoiceDbContext> options)
         receipts.HasAlternateKey(receipt => new { receipt.PropertyId, receipt.Id });
         receipts.HasIndex(receipt => new { receipt.PropertyId, receipt.ContentHash }).IsUnique();
         receipts.HasIndex(receipt => new { receipt.DocumentDate, receipt.Vendor });
-        receipts.HasIndex(receipt => receipt.Category);
         receipts.HasIndex(receipt => receipt.ProcessingStatus);
 
         receipts.Property(receipt => receipt.FileName).HasMaxLength(255).IsRequired();
@@ -42,7 +42,6 @@ public sealed class InvoiceDbContext(DbContextOptions<InvoiceDbContext> options)
         receipts.Property(receipt => receipt.Vendor).HasMaxLength(256);
         receipts.Property(receipt => receipt.Currency).HasMaxLength(3).IsFixedLength();
         receipts.Property(receipt => receipt.TotalAmount).HasPrecision(18, 4);
-        receipts.Property(receipt => receipt.Category).HasMaxLength(128);
         receipts.Property(receipt => receipt.Description).HasMaxLength(4000);
         receipts.Property(receipt => receipt.ExtractedMetadataJson).HasColumnType("jsonb");
         receipts.Property(receipt => receipt.ProcessingStatus).HasConversion<string>().HasMaxLength(24);
@@ -61,18 +60,28 @@ public sealed class InvoiceDbContext(DbContextOptions<InvoiceDbContext> options)
             .OnDelete(DeleteBehavior.Restrict);
 
         var lineItems = modelBuilder.Entity<ReceiptLineItem>();
+        var projects = modelBuilder.Entity<Project>();
+        projects.HasKey(project => project.Id);
+        projects.HasAlternateKey(project => new { project.PropertyId, project.Id });
+        projects.Property(project => project.Name).HasMaxLength(128).IsRequired();
+        projects.Property(project => project.NormalizedName).HasMaxLength(128).IsRequired();
+        projects.HasIndex(project => new { project.PropertyId, project.NormalizedName }).IsUnique();
+        projects.HasOne<Property>().WithMany().HasForeignKey(project => project.PropertyId).OnDelete(DeleteBehavior.Restrict);
         lineItems.HasKey(lineItem => lineItem.Id);
         lineItems.Property(lineItem => lineItem.Description).HasMaxLength(1000).IsRequired();
         lineItems.Property(lineItem => lineItem.Quantity).HasPrecision(18, 4);
         lineItems.Property(lineItem => lineItem.UnitPrice).HasPrecision(18, 4);
         lineItems.Property(lineItem => lineItem.LineTotal).HasPrecision(18, 4);
-        lineItems.Property(lineItem => lineItem.Category).HasMaxLength(128);
 
         receipts
             .HasMany(receipt => receipt.LineItems)
             .WithOne(lineItem => lineItem.Receipt)
-            .HasForeignKey(lineItem => lineItem.ReceiptId)
+            .HasForeignKey(lineItem => new { lineItem.PropertyId, lineItem.ReceiptId })
+            .HasPrincipalKey(receipt => new { receipt.PropertyId, receipt.Id })
             .OnDelete(DeleteBehavior.Cascade);
+        lineItems.HasOne(item => item.Project).WithMany()
+            .HasForeignKey(item => new { item.PropertyId, item.ProjectId })
+            .HasPrincipalKey(project => new { project.PropertyId, project.Id }).OnDelete(DeleteBehavior.Restrict);
 
         var expenses = modelBuilder.Entity<ImprovementExpense>();
         expenses.HasKey(expense => expense.Id);
@@ -91,5 +100,17 @@ public sealed class InvoiceDbContext(DbContextOptions<InvoiceDbContext> options)
             .OnDelete(DeleteBehavior.Restrict);
         expenses.HasOne<Property>().WithMany().HasForeignKey(expense => expense.PropertyId)
             .OnDelete(DeleteBehavior.Restrict);
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        foreach (var entry in ChangeTracker.Entries<ReceiptLineItem>()
+            .Where(entry => entry.State == EntityState.Added && entry.Entity.PropertyId == Guid.Empty))
+        {
+            var receipt = ChangeTracker.Entries<Receipt>()
+                .Select(item => item.Entity).SingleOrDefault(item => item.Id == entry.Entity.ReceiptId);
+            if (receipt is not null) entry.Entity.PropertyId = receipt.PropertyId;
+        }
+        return base.SaveChangesAsync(cancellationToken);
     }
 }

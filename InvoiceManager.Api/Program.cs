@@ -48,6 +48,7 @@ builder.Services.AddScoped<ReceiptArchiveService>();
 builder.Services.AddScoped<PropertyService>();
 builder.Services.AddScoped<ImprovementService>();
 builder.Services.AddScoped<ExpenseReportService>();
+builder.Services.AddScoped<ProjectService>();
 builder.Services.AddScoped<IReceiptQuestionService, ReceiptQuestionService>();
 
 var app = builder.Build();
@@ -75,5 +76,6 @@ if (app.Environment.IsDevelopment())
 app.MapReceiptEndpoints();
 app.MapPropertyEndpoints();
 app.MapImprovementEndpoints();
+app.MapProjectEndpoints();
 
 app.Run();

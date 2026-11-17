@@ -4,6 +4,8 @@
 .archive-heading h2 { margin: 0; font-family: Georgia, serif; font-size: 24px; font-weight: 400; }
 .archive-heading > span { color: var(--muted); font-size: 12px; }
 .archive-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; padding: 18px 0; border-block: 1px solid var(--line); }
+.archive-filters > .project-select { display: block; min-width: 0; }
+.archive-filters > .project-select label { width: 100%; }
 .archive-filters label, .archive-toolbar label { min-width: 0; display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 650; }
 .archive-view select, .archive-filters input { width: 100%; min-width: 0; height: 38px; padding: 0 9px; color: var(--ink); background: var(--surface); border: 1px solid #cbd4cb; border-radius: 3px; font: inherit; font-size: 12px; }
 .archive-view select:focus-visible, .archive-view input:focus-visible, .archive-view button:focus-visible { outline: 2px solid var(--forest); outline-offset: 3px; }

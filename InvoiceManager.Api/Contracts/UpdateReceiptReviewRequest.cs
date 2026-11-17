@@ -14,8 +14,6 @@ public sealed record UpdateReceiptReviewRequest
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal? TotalAmount { get; init; }
 
-    public string? Category { get; init; }
-
     public string? Description { get; init; }
 
     public List<UpdateReceiptLineItemRequest>? LineItems { get; init; } = [];
@@ -30,13 +28,19 @@ public sealed record UpdateReceiptReviewRequest
 /// <summary>Contains a user-verified invoice line item.</summary>
 public sealed record UpdateReceiptLineItemRequest
 {
+    public Guid? Id { get; init; }
+    private Guid? _projectId;
+    public Guid? ProjectId { get => _projectId; init { _projectId = value; ProjectAssignmentSupplied = true; } }
+    [JsonIgnore]
+    public bool ProjectAssignmentSupplied { get; private init; }
     public string? Description { get; init; }
 
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal? Quantity { get; init; }
 
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal? UnitPrice { get; init; }
 
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public decimal? LineTotal { get; init; }
-
-    public string? Category { get; init; }
 }

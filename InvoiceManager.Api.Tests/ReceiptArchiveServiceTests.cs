@@ -32,21 +32,21 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
     [Theory]
     [InlineData("asc")]
     [InlineData("desc")]
-    public async Task BrowseAsync_CategorySort_KeepsYearsDescendingAndIncludesCompleted(string direction)
+    public async Task BrowseAsync_DateSort_KeepsYearsDescendingAndIncludesCompleted(string direction)
     {
-        var older = CreateReceipt(new DateOnly(2023, 5, 1), "Flooring");
-        var paint = CreateReceipt(new DateOnly(2024, 4, 1), "Paint");
-        var flooring = CreateReceipt(new DateOnly(2024, 3, 1), "Flooring");
-        flooring.ProcessingStatus = ReceiptProcessingStatus.NeedsReview;
-        var undated = CreateReceipt(null, null);
-        _dbContext.AddRange(older, paint, flooring, undated);
+        var older = CreateReceipt(new DateOnly(2023, 5, 1));
+        var newer = CreateReceipt(new DateOnly(2024, 4, 1));
+        var recent = CreateReceipt(new DateOnly(2024, 3, 1));
+        recent.ProcessingStatus = ReceiptProcessingStatus.NeedsReview;
+        var undated = CreateReceipt(null);
+        _dbContext.AddRange(older, newer, recent, undated);
         await _dbContext.SaveChangesAsync();
 
-        var result = await _service.BrowseAsync(new(Property.DefaultPropertyId, SortBy: "category", Direction: direction), CancellationToken.None);
+        var result = await _service.BrowseAsync(new(Property.DefaultPropertyId, SortBy: "date", Direction: direction), CancellationToken.None);
 
         var expected = direction == "asc"
-            ? new[] { flooring.Id, paint.Id, older.Id, undated.Id }
-            : new[] { paint.Id, flooring.Id, older.Id, undated.Id };
+            ? new[] { recent.Id, newer.Id, older.Id, undated.Id }
+            : new[] { newer.Id, recent.Id, older.Id, undated.Id };
         Assert.Equal(expected, result.Items.Select(receipt => receipt.Id));
         Assert.Equal(4, result.TotalCount);
         Assert.Contains(result.Items, receipt => receipt.Status == ReceiptProcessingStatus.Completed);
@@ -57,37 +57,35 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
     [Fact]
     public async Task BrowseAsync_CombinedFilters_UsesDocumentDateAndKeepsFilterChoices()
     {
-        var match = CreateReceipt(new DateOnly(2024, 5, 10), "Flooring");
-        var otherCategory = CreateReceipt(new DateOnly(2024, 5, 10), "Paint");
-        var otherDate = CreateReceipt(new DateOnly(2024, 6, 10), "Flooring");
-        var otherStatus = CreateReceipt(new DateOnly(2024, 5, 10), "Flooring");
+        var match = CreateReceipt(new DateOnly(2024, 5, 10));
+        var otherDate = CreateReceipt(new DateOnly(2024, 6, 10));
+        var otherStatus = CreateReceipt(new DateOnly(2024, 5, 10));
         otherStatus.ProcessingStatus = ReceiptProcessingStatus.NeedsReview;
-        var otherCurrency = CreateReceipt(new DateOnly(2024, 5, 10), "Flooring");
+        var otherCurrency = CreateReceipt(new DateOnly(2024, 5, 10));
         otherCurrency.Currency = "EUR";
-        var otherVendor = CreateReceipt(new DateOnly(2024, 5, 10), "Flooring");
+        var otherVendor = CreateReceipt(new DateOnly(2024, 5, 10));
         otherVendor.Vendor = "Other vendor";
-        _dbContext.AddRange(match, otherCategory, otherDate, otherStatus, otherCurrency, otherVendor);
+        _dbContext.AddRange(match, otherDate, otherStatus, otherCurrency, otherVendor);
         await _dbContext.SaveChangesAsync();
 
         var result = await _service.BrowseAsync(new(Property.DefaultPropertyId, Year: 2024,
             DateFrom: new DateOnly(2024, 5, 1), DateTo: new DateOnly(2024, 5, 31),
-            Category: "flooring", Vendor: "tile house", Currency: "sek", Status: "Completed"), CancellationToken.None);
+            Vendor: "tile house", Currency: "sek", Status: "Completed"), CancellationToken.None);
 
         Assert.Equal(match.Id, Assert.Single(result.Items).Id);
         Assert.Equal(1, result.TotalCount);
-        Assert.Contains("Paint", result.Categories);
         Assert.Contains("EUR", result.Currencies);
         Assert.Contains("Other vendor", result.Vendors);
     }
 
     [Fact]
-    public async Task BrowseAsync_UndatedAndUncategorized_AreDiscoverable()
+    public async Task BrowseAsync_UndatedReceiptsAreDiscoverable()
     {
-        var undated = CreateReceipt(null, null);
-        _dbContext.AddRange(undated, CreateReceipt(new DateOnly(2024, 5, 1), "Paint"));
+        var undated = CreateReceipt(null);
+        _dbContext.AddRange(undated, CreateReceipt(new DateOnly(2024, 5, 1)));
         await _dbContext.SaveChangesAsync();
 
-        var result = await _service.BrowseAsync(new(Property.DefaultPropertyId, Undated: true, Uncategorized: true), CancellationToken.None);
+        var result = await _service.BrowseAsync(new(Property.DefaultPropertyId, Undated: true), CancellationToken.None);
 
         Assert.Equal(undated.Id, Assert.Single(result.Items).Id);
     }
@@ -95,7 +93,7 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
     [Fact]
     public async Task BrowseAsync_Pagination_HasNoDuplicatesAndCanReturnAnEmptyPage()
     {
-        _dbContext.AddRange(Enumerable.Range(0, 5).Select(index => CreateReceipt(new DateOnly(2024, 5, 1), "Paint")));
+        _dbContext.AddRange(Enumerable.Range(0, 5).Select(_ => CreateReceipt(new DateOnly(2024, 5, 1))));
         await _dbContext.SaveChangesAsync();
 
         var first = await _service.BrowseAsync(new(Property.DefaultPropertyId, PageSize: 2), CancellationToken.None);
@@ -116,10 +114,10 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
     [InlineData("amount")]
     public async Task BrowseAsync_Ordering_RespectsDirectionWithinYear(string sortBy)
     {
-        var lower = CreateReceipt(new DateOnly(2024, 1, 1), "Paint");
+        var lower = CreateReceipt(new DateOnly(2024, 1, 1));
         lower.Vendor = "Alpha";
         lower.TotalAmount = 10;
-        var higher = CreateReceipt(new DateOnly(2024, 12, 1), "Paint");
+        var higher = CreateReceipt(new DateOnly(2024, 12, 1));
         higher.Vendor = "Zulu";
         higher.TotalAmount = 20;
         _dbContext.AddRange(lower, higher);
@@ -137,7 +135,7 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
     {
         ReceiptArchiveRequest[] requests = [new(Guid.Empty), new(Property.DefaultPropertyId, Page: 0), new(Property.DefaultPropertyId, PageSize: 101), new(Property.DefaultPropertyId, SortBy: "sql"),
             new(Property.DefaultPropertyId, Direction: "invalid"), new(Property.DefaultPropertyId, Status: "unknown"), new(Property.DefaultPropertyId, Year: 2024, Undated: true),
-            new(Property.DefaultPropertyId, Category: "Paint", Uncategorized: true),
+            new(Property.DefaultPropertyId, SortBy: "category"),
             new(Property.DefaultPropertyId, DateFrom: new DateOnly(2025, 1, 1), DateTo: new DateOnly(2024, 1, 1))];
         foreach (var request in requests)
             await Assert.ThrowsAsync<ArgumentException>(() => _service.BrowseAsync(request, CancellationToken.None));
@@ -149,7 +147,7 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
         var vacationHome = new Property { Name = "Vacation home" };
         _dbContext.Properties.Add(vacationHome);
         _dbContext.Receipts.AddRange(
-            CreateReceipt(new DateOnly(2024, 1, 1), "Main property"),
+            CreateReceipt(new DateOnly(2024, 1, 1)),
             new Receipt
             {
                 PropertyId = vacationHome.Id,
@@ -171,18 +169,17 @@ public sealed class ReceiptArchiveServiceTests(PostgresFixture fixture)
             new(vacationHome.Id),
             CancellationToken.None);
 
-        Assert.Equal("Main property", Assert.Single(defaultResult.Items).Category);
+        Assert.Equal("synthetic-receipt.pdf", Assert.Single(defaultResult.Items).FileName);
         Assert.Equal("vacation-home.pdf", Assert.Single(selectedResult.Items).FileName);
     }
 
-    private static Receipt CreateReceipt(DateOnly? date, string? category) => new()
+    private static Receipt CreateReceipt(DateOnly? date) => new()
     {
         PropertyId = Property.DefaultPropertyId,
         FileName = "synthetic-receipt.pdf",
         FilePath = $"{Guid.NewGuid():N}.pdf",
         ContentHash = Guid.NewGuid().ToString("N").PadRight(64, '0'),
         DocumentDate = date,
-        Category = category,
         Vendor = "Tile House",
         Currency = "SEK",
         TotalAmount = 100,

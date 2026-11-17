@@ -30,12 +30,15 @@ public sealed class ImprovementService(InvoiceDbContext dbContext)
         return request;
     }
 
-    public async Task<IReadOnlyList<DraftExpenseResponse>?> ListAsync(Guid propertyId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<DraftExpenseResponse>?> ListAsync(Guid propertyId, CancellationToken cancellationToken,
+        Guid? projectId = null, bool unassignedProject = false)
     {
         if (!await dbContext.Properties.AnyAsync(property => property.Id == propertyId, cancellationToken)) return null;
+        await ProjectScope.ValidateAsync(dbContext, propertyId, projectId, unassignedProject, cancellationToken);
+        var sources = ProjectScope.Apply(dbContext.Receipts.Where(receipt => receipt.PropertyId == propertyId), projectId, unassignedProject);
         var expenses = await dbContext.ImprovementExpenses.AsNoTracking()
-            .Where(expense => expense.PropertyId == propertyId)
-            .Include(expense => expense.Receipt).ThenInclude(receipt => receipt.LineItems)
+            .Where(expense => expense.PropertyId == propertyId && sources.Any(receipt => receipt.Id == expense.ReceiptId))
+            .Include(expense => expense.Receipt).ThenInclude(receipt => receipt.LineItems).ThenInclude(item => item.Project)
             .OrderByDescending(expense => expense.CreatedAtUtc).ThenBy(expense => expense.Id)
             .ToListAsync(cancellationToken);
         return expenses.Select(expense => ToResponse(expense, expenses)).ToArray();
@@ -51,7 +54,7 @@ public sealed class ImprovementService(InvoiceDbContext dbContext)
             : new ImprovementExpense { PropertyId = propertyId };
         if (expense is null) return null;
         ValidateDraft(request);
-        var receipt = await dbContext.Receipts.Include(item => item.LineItems).Include(item => item.ImprovementExpenses).SingleOrDefaultAsync(
+        var receipt = await dbContext.Receipts.Include(item => item.LineItems).ThenInclude(item => item.Project).Include(item => item.ImprovementExpenses).SingleOrDefaultAsync(
             item => item.Id == request.ReceiptId && item.PropertyId == propertyId, cancellationToken);
         if (receipt is null) throw new ArgumentException("Select a receipt belonging to this property.");
         if (receipt.ProcessingStatus != ReceiptProcessingStatus.Completed)

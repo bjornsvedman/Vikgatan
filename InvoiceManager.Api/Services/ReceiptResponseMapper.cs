@@ -15,7 +15,6 @@ internal static class ReceiptResponseMapper
         receipt.Vendor,
         receipt.Currency,
         receipt.TotalAmount,
-        receipt.Category,
         receipt.Description,
         receipt.ProcessingStatus,
         receipt.ProcessingError,
@@ -27,8 +26,8 @@ internal static class ReceiptResponseMapper
                 item.Description,
                 item.Quantity,
                 item.UnitPrice,
-                item.LineTotal,
-                item.Category))
+                item.LineTotal) { ProjectId = item.ProjectId, ProjectName = item.Project?.Name,
+                    LineTotalExact = Format(item.LineTotal), QuantityExact = Format(item.Quantity), UnitPriceExact = Format(item.UnitPrice) })
             .ToArray())
     {
         ReviewVersion = receipt.ReviewVersion,

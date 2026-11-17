@@ -9,7 +9,7 @@ internal static class ReceiptExpenseReviewRules
         IReadOnlyList<ReceiptExpenseRequest> expenses, bool approve, decimal? total, string? currency)
     {
         var errors = new List<string>();
-        if (expenses.Any(expense => expense is null)) return ["Expense splits cannot contain null entries."];
+        if (expenses.Any(expense => expense is null)) return ["Expense classifications cannot contain null entries."];
         if (expenses.Count > 100) errors.Add("At most 100 expense portions are supported.");
         if (expenses.Where(item => item.Id.HasValue).GroupBy(item => item.Id).Any(group => group.Count() > 1))
             errors.Add("An expense portion ID cannot be repeated.");
@@ -28,28 +28,22 @@ internal static class ReceiptExpenseReviewRules
             if (!approve && !expense.Confirm) continue;
             if (expense.Type == ImprovementType.Unclassified || expense.Amount is null
                 || string.IsNullOrWhiteSpace(expense.Currency) || expense.ExpenseDate is null)
-                errors.Add("Each confirmed expense portion needs a classification, work/expense date, amount and currency.");
-            if (expense.Type == ImprovementType.Excluded)
-            {
-                if (string.IsNullOrWhiteSpace(expense.ExclusionReason))
-                    errors.Add("Excluded expense portions need an exclusion reason.");
-            }
-            else if (string.IsNullOrWhiteSpace(expense.WorkDetails))
-                errors.Add("Included expense portions need work details (use and previous/new standard).");
+                errors.Add("The receipt-wide classification needs a classification, work/expense date, amount and currency.");
             if (approve && !expense.Confirm)
-                errors.Add("Explicitly confirm every expense portion before approval.");
+                errors.Add("Explicitly confirm the receipt-wide classification before approval.");
         }
         if (approve)
         {
             if (!string.Equals(currency?.Trim(), "SEK", StringComparison.OrdinalIgnoreCase)
                 || expenses.Any(item => !string.Equals(item.Currency?.Trim(), "SEK", StringComparison.OrdinalIgnoreCase)))
                 errors.Add("This version supports SEK only. Correct a misread currency explicitly; foreign-currency amounts cannot be converted or approved.");
-            if (expenses.Count == 0) errors.Add("Classify the receipt's expenses before approval.");
+            if (expenses.Count == 0) errors.Add("Add one expense classification for the entire receipt before approval.");
+            if (expenses.Count > 1) errors.Add("Use one expense classification for the entire receipt before approval.");
             if (expenses.Any(item => item.Amount is null || string.IsNullOrWhiteSpace(item.Currency)
                 || !string.Equals(item.Currency.Trim(), currency?.Trim(), StringComparison.OrdinalIgnoreCase)))
-                errors.Add("All expense portions must use the receipt currency; no automatic conversion is supported.");
-            else if (total is null || expenses.Sum(item => item.Amount!.Value) != total)
-                errors.Add("Included and excluded expense portions must add up to the receipt total before approval. Incomplete or overlapping amounts may be saved as drafts.");
+                errors.Add("The receipt-wide classification must use the receipt currency; no automatic conversion is supported.");
+            else if (expenses.Count == 1 && (total is null || expenses[0].Amount != total))
+                errors.Add("The receipt-wide classification amount must equal the receipt total before approval. An incomplete amount may be saved as a draft.");
         }
         return errors;
     }

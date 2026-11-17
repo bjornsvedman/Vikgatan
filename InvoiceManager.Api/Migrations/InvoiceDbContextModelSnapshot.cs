@@ -100,6 +100,39 @@ namespace InvoiceManager.Api.Migrations
                     b.ToTable("ImprovementExpenses");
                 });
 
+            modelBuilder.Entity("InvoiceManager.Api.Documents.Project", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PropertyId", "NormalizedName")
+                        .IsUnique();
+
+                    b.ToTable("Projects");
+                });
+
             modelBuilder.Entity("InvoiceManager.Api.Documents.Property", b =>
                 {
                     b.Property<Guid>("Id")
@@ -141,10 +174,6 @@ namespace InvoiceManager.Api.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
-
-                    b.Property<string>("Category")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
 
                     b.Property<string>("ContentHash")
                         .IsRequired()
@@ -220,8 +249,6 @@ namespace InvoiceManager.Api.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Category");
-
                     b.HasIndex("ProcessingStatus");
 
                     b.HasIndex("DocumentDate", "Vendor");
@@ -238,10 +265,6 @@ namespace InvoiceManager.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<string>("Category")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
                     b.Property<string>("Description")
                         .IsRequired()
                         .HasMaxLength(1000)
@@ -250,6 +273,12 @@ namespace InvoiceManager.Api.Migrations
                     b.Property<decimal?>("LineTotal")
                         .HasPrecision(18, 4)
                         .HasColumnType("numeric(18,4)");
+
+                    b.Property<Guid?>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
 
                     b.Property<decimal?>("Quantity")
                         .HasPrecision(18, 4)
@@ -264,7 +293,9 @@ namespace InvoiceManager.Api.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ReceiptId");
+                    b.HasIndex("PropertyId", "ProjectId");
+
+                    b.HasIndex("PropertyId", "ReceiptId");
 
                     b.ToTable("ReceiptLineItems");
                 });
@@ -287,6 +318,15 @@ namespace InvoiceManager.Api.Migrations
                     b.Navigation("Receipt");
                 });
 
+            modelBuilder.Entity("InvoiceManager.Api.Documents.Project", b =>
+                {
+                    b.HasOne("InvoiceManager.Api.Documents.Property", null)
+                        .WithMany()
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("InvoiceManager.Api.Documents.Receipt", b =>
                 {
                     b.HasOne("InvoiceManager.Api.Documents.Property", "Property")
@@ -300,11 +340,20 @@ namespace InvoiceManager.Api.Migrations
 
             modelBuilder.Entity("InvoiceManager.Api.Documents.ReceiptLineItem", b =>
                 {
+                    b.HasOne("InvoiceManager.Api.Documents.Project", "Project")
+                        .WithMany()
+                        .HasForeignKey("PropertyId", "ProjectId")
+                        .HasPrincipalKey("PropertyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("InvoiceManager.Api.Documents.Receipt", "Receipt")
                         .WithMany("LineItems")
-                        .HasForeignKey("ReceiptId")
+                        .HasForeignKey("PropertyId", "ReceiptId")
+                        .HasPrincipalKey("PropertyId", "Id")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("Project");
 
                     b.Navigation("Receipt");
                 });

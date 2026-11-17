@@ -52,6 +52,7 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
         builder.Database = name;
         var receiptId = Guid.NewGuid();
         var expenseId = Guid.NewGuid();
+        var lineId = Guid.NewGuid();
         try
         {
             await using var legacy = new InvoiceDbContext(new DbContextOptionsBuilder<InvoiceDbContext>()
@@ -64,6 +65,10 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
                     {new string('A', 64)}, {"Completed"}, {DateTimeOffset.UtcNow}, {DateTimeOffset.UtcNow})
                 """);
             await legacy.GetService<IMigrator>().MigrateAsync("20261105130755_AddDraftImprovementLedger");
+            await legacy.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO "ReceiptLineItems" ("Id", "ReceiptId", "Description", "LineTotal")
+                VALUES ({lineId}, {receiptId}, {"Synthetic legacy item"}, {12.3456m})
+                """);
             await legacy.Database.ExecuteSqlInterpolatedAsync($"""
                 INSERT INTO "ImprovementExpenses" ("Id", "PropertyId", "ReceiptId", "Description", "Type",
                     "Amount", "Currency", "CreatedAtUtc", "UpdatedAtUtc")
@@ -85,6 +90,12 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
             Assert.Equal(12.3456m, savedExpense.Amount);
             Assert.Null(savedExpense.ConfirmedAtUtc);
             Assert.Null(savedExpense.ConfirmedReceiptVersion);
+            var savedLine = await legacy.ReceiptLineItems.SingleAsync();
+            Assert.Equal(lineId, savedLine.Id);
+            Assert.Equal(receiptId, savedLine.ReceiptId);
+            Assert.Equal(Property.DefaultPropertyId, savedLine.PropertyId);
+            Assert.Equal(12.3456m, savedLine.LineTotal);
+            Assert.Null(savedLine.ProjectId);
         }
         finally
         {
@@ -239,6 +250,25 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
         null, "Synthetic replacement", new(2026, 1, 1), ImprovementType.RepairsAndMaintenance,
         amount, "SEK", null, "Replaced worn floor with equivalent material", null, 0m, 0m, null, true);
 
+    private static ImprovementExpense LegacyPortion(Receipt receipt, ReceiptExpenseRequest input) => new()
+    {
+        PropertyId = receipt.PropertyId,
+        ReceiptId = receipt.Id,
+        Description = input.Description!,
+        ExpenseDate = input.ExpenseDate,
+        Type = input.Type,
+        Amount = input.Amount,
+        Currency = input.Currency,
+        Notes = input.Notes,
+        WorkDetails = input.WorkDetails,
+        ExclusionReason = input.ExclusionReason,
+        RotAmount = input.RotAmount,
+        OtherCompensationAmount = input.OtherCompensationAmount,
+        AdjustmentsAlreadyInAmount = input.AdjustmentsAlreadyInAmount,
+        ConfirmedAtUtc = DateTimeOffset.UtcNow,
+        ConfirmedReceiptVersion = receipt.ReviewVersion
+    };
+
     private static UpdateReceiptReviewRequest Review(Receipt receipt, params ReceiptExpenseRequest[] splits) => new()
     {
         Vendor = receipt.Vendor, DocumentDate = new(2026, 1, 1), Currency = receipt.Currency,
@@ -247,14 +277,13 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
     };
 
     [Fact]
-    public async Task FirstReview_SavesMixedSplitsAtomically_AndPreservesStableIds()
+    public async Task FirstReview_SavesOneReceiptWideClassification_AndPreservesStableId()
     {
         var receipt = await AddReceipt();
         receipt.ProcessingStatus = ReceiptProcessingStatus.Pending;
         await _db.SaveChangesAsync();
         var review = new ReceiptReviewService(_db);
-        var result = await review.ReviewAsync(receipt.Id, Review(receipt, Split(75),
-            Split(25) with { Type = ImprovementType.Excluded, ExclusionReason = "Unrelated personal purchase" }), default);
+        var result = await review.ReviewAsync(receipt.Id, Review(receipt, Split()), default);
         Assert.Equal(ReceiptReviewStatus.Updated, result.Status);
         Assert.All(result.Receipt!.Expenses, expense => Assert.NotNull(expense.ConfirmedAtUtc));
         var ids = result.Receipt.Expenses.Select(expense => expense.Id).Order().ToArray();
@@ -265,23 +294,18 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
         }).ToArray()) with { LineItems = [new() { Description = "Corrected source line", LineTotal = 100 }] };
         result = await review.ReviewAsync(receipt.Id, request, default);
         Assert.Equal(ids, result.Receipt!.Expenses.Select(expense => expense.Id).Order());
-        Assert.Equal(2, await _db.ImprovementExpenses.CountAsync());
+        Assert.Equal(1, await _db.ImprovementExpenses.CountAsync());
         var readiness = await _service.GetReadinessAsync(receipt.PropertyId, default);
-        Assert.Equal(2, readiness!.ConfirmedExpenses);
-        Assert.Equal(1, readiness.ExcludedExpenses);
+        Assert.Equal(1, readiness!.ConfirmedExpenses);
+        Assert.Equal(0, readiness.ExcludedExpenses);
         Assert.False(readiness.CanGenerateReport);
         Assert.Contains(readiness.MissingFacts, fact => fact.Contains("wear"));
     }
 
     [Theory]
     [InlineData("unclassified")]
-    [InlineData("unconfirmed")]
-    [InlineData("missingWork")]
-    [InlineData("excludedReason")]
-    [InlineData("overlap")]
-    [InlineData("unallocated")]
-    [InlineData("currency")]
     [InlineData("foreignId")]
+    [InlineData("multipleClassifications")]
     public async Task InvalidApproval_LeavesMetadataAndExpensesUnchanged(string scenario)
     {
         var receipt = await AddReceipt();
@@ -290,23 +314,95 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
         var split = scenario switch
         {
             "unclassified" => Split() with { Type = ImprovementType.Unclassified },
-            "unconfirmed" => Split() with { Confirm = false },
-            "missingWork" => Split() with { WorkDetails = null },
-            "excludedReason" => Split() with { Type = ImprovementType.Excluded },
-            "overlap" => Split(101),
-            "unallocated" => Split(99),
-            "currency" => Split() with { Currency = "EUR" },
+            "multipleClassifications" => Split(50),
             _ => Split() with { Id = Guid.NewGuid() },
         };
+        ReceiptExpenseRequest[] splits = scenario == "multipleClassifications" ? [split, Split(50)] : [split];
         var result = await new ReceiptReviewService(_db).ReviewAsync(receipt.Id,
-            Review(receipt, split) with { Vendor = "Must not save" }, default);
+            Review(receipt, splits) with { Vendor = "Must not save" }, default);
         Assert.Equal(ReceiptReviewStatus.Invalid, result.Status);
+        if (scenario == "multipleClassifications")
+            Assert.Contains(result.ValidationErrors, error => error.Contains("one expense classification", StringComparison.Ordinal));
         _db.ChangeTracker.Clear();
         var stored = await _db.Receipts.SingleAsync(item => item.Id == receipt.Id);
         Assert.Equal("Synthetic vendor", stored.Vendor);
         Assert.Equal(ReceiptProcessingStatus.Pending, stored.ProcessingStatus);
         Assert.Equal(0, stored.ReviewVersion);
         Assert.Empty(await _db.ImprovementExpenses.ToListAsync());
+    }
+
+    [Fact]
+    public async Task MixedLegacyClassifications_RemainStoredUntilUserChoosesOne()
+    {
+        var receipt = await AddReceipt();
+        var legacyIncluded = LegacyPortion(receipt, Split(60));
+        var legacyExcluded = LegacyPortion(receipt, Split(40) with
+        {
+            Type = ImprovementType.Excluded,
+            WorkDetails = null,
+            ExclusionReason = "Synthetic unrelated purchase"
+        });
+        receipt.ImprovementExpenses.AddRange([legacyIncluded, legacyExcluded]);
+        _db.ImprovementExpenses.AddRange(receipt.ImprovementExpenses);
+        await _db.SaveChangesAsync();
+
+        var result = await new ReceiptReviewService(_db).ReviewAsync(receipt.Id,
+            Review(receipt, Split(60) with { Id = legacyIncluded.Id },
+                Split(40) with { Id = legacyExcluded.Id, Type = ImprovementType.Excluded,
+                    WorkDetails = null, ExclusionReason = "Synthetic unrelated purchase" }), default);
+
+        Assert.Equal(ReceiptReviewStatus.Invalid, result.Status);
+        Assert.Contains(result.ValidationErrors, error => error.Contains("one expense classification", StringComparison.Ordinal));
+        _db.ChangeTracker.Clear();
+        var saved = await _db.ImprovementExpenses.Where(item => item.ReceiptId == receipt.Id).OrderBy(item => item.Type).ToArrayAsync();
+        Assert.Equal(2, saved.Length);
+        Assert.Contains(saved, item => item.Type == ImprovementType.RepairsAndMaintenance && item.Amount == 60);
+        Assert.Contains(saved, item => item.Type == ImprovementType.Excluded && item.Amount == 40);
+    }
+
+    [Fact]
+    public async Task ApprovalWithoutExpensePortions_ReportsOnlyMissingClassification()
+    {
+        var receipt = await AddReceipt();
+        receipt.ProcessingStatus = ReceiptProcessingStatus.Pending;
+        await _db.SaveChangesAsync();
+
+        var result = await new ReceiptReviewService(_db).ReviewAsync(
+            receipt.Id, Review(receipt), default);
+
+        Assert.Equal(ReceiptReviewStatus.Invalid, result.Status);
+        Assert.Contains("Add one expense classification for the entire receipt before approval.", result.ValidationErrors);
+        Assert.DoesNotContain(result.ValidationErrors,
+            error => error.Contains("add up to the receipt total", StringComparison.Ordinal));
+        result = await new ReceiptReviewService(_db).ReviewAsync(receipt.Id,
+            Review(receipt) with { Expenses = null }, default);
+        Assert.Equal(ReceiptReviewStatus.Invalid, result.Status);
+    }
+
+    [Theory]
+    [InlineData(ImprovementType.BasicImprovement)]
+    [InlineData(ImprovementType.RepairsAndMaintenance)]
+    [InlineData(ImprovementType.Excluded)]
+    public async Task ReceiptWideClassification_UsesReceiptFactsWhenOnlyTypeIsProvided(ImprovementType type)
+    {
+        var receipt = await AddReceipt();
+        receipt.Description = "Synthetic floor purchase";
+        receipt.DocumentDate = new(2025, 3, 4);
+        await _db.SaveChangesAsync();
+        var classification = new ReceiptExpenseRequest(null, null, null, type, null, null,
+            null, null, null, null, null, null, false);
+
+        var result = await new ReceiptReviewService(_db).ReviewAsync(receipt.Id,
+            Review(receipt, classification) with { DocumentDate = receipt.DocumentDate }, default);
+
+        Assert.Equal(ReceiptReviewStatus.Updated, result.Status);
+        var saved = Assert.Single(result.Receipt!.Expenses);
+        Assert.Equal("Synthetic floor purchase", saved.Description);
+        Assert.Equal(new DateOnly(2025, 3, 4), saved.ExpenseDate);
+        Assert.Equal("100.00", saved.Amount);
+        Assert.Equal("SEK", saved.Currency);
+        Assert.NotNull(saved.ConfirmedAtUtc);
+        Assert.Equal(1, await _db.ImprovementExpenses.CountAsync());
     }
 
     [Fact]
@@ -343,7 +439,7 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
         var review = new ReceiptReviewService(_db);
         await review.ReviewAsync(receipt.Id, Review(receipt, Split()), default);
         var result = await review.ReviewAsync(receipt.Id, Review(receipt) with
-            { Expenses = null, TotalAmount = 200 }, default);
+            { Expenses = null, TotalAmount = 200, MarkReviewed = false }, default);
         Assert.Equal(ReceiptProcessingStatus.Completed, result.Receipt!.Status);
         Assert.Null(Assert.Single(result.Receipt.Expenses).ConfirmedAtUtc);
         Assert.Equal(1, (await _service.GetReadinessAsync(receipt.PropertyId, default))!.PendingExpenses);
@@ -421,11 +517,16 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
         receipt.Vendor = "<script>alert('vendor')</script>";
         receipt.FileName = "<img onerror=alert(1)>.pdf";
         await _db.SaveChangesAsync();
-        var result = await new ReceiptReviewService(_db).ReviewAsync(receipt.Id,
-            Review(receipt, Split(75.1234m) with
-                { ExpenseDate = new(2023, 5, 1), Description = "<script>expense</script>", RotAmount = 25 },
-                Split(25) with { Type = ImprovementType.Excluded, ExclusionReason = "<b>Personal</b>" }), default);
-        Assert.Equal(ReceiptReviewStatus.Updated, result.Status);
+        receipt.ImprovementExpenses.Add(LegacyPortion(receipt, Split(100.1234m) with
+            { ExpenseDate = new(2023, 5, 1), Description = "<script>expense</script>", RotAmount = 25 }));
+        _db.ImprovementExpenses.AddRange(receipt.ImprovementExpenses);
+        await _db.SaveChangesAsync();
+        var excluded = await AddReceipt();
+        excluded.TotalAmount = 25;
+        excluded.ImprovementExpenses.Add(LegacyPortion(excluded, Split(25) with
+            { Type = ImprovementType.Excluded, ExclusionReason = "<b>Personal</b>" }));
+        _db.ImprovementExpenses.AddRange(excluded.ImprovementExpenses);
+        await _db.SaveChangesAsync();
         var unresolved = await AddReceipt();
         unresolved.Currency = "EUR";
         unresolved.ImprovementExpenses.Add(new()
@@ -440,12 +541,12 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
         await _db.SaveChangesAsync();
         var service = new ExpenseReportService(_db);
         var report = await service.GenerateAsync(receipt.PropertyId, default);
-        Assert.Equal("75.1234", report!.IncludedTotal);
+        Assert.Equal("100.1234", report!.IncludedTotal);
         Assert.Equal("25.00", report.ExcludedTotal);
-        Assert.Equal(2, report.ReceiptCount);
-        Assert.Equal(1, report.ConfirmedReceiptCount);
+        Assert.Equal(3, report.ReceiptCount);
+        Assert.Equal(2, report.ConfirmedReceiptCount);
         Assert.Equal(2023, Assert.Single(report.Included).ExpenseDate.Year);
-        Assert.Equal("75.1234", Assert.Single(report.Totals, total => total.Year == 2023).Amount);
+        Assert.Equal("100.1234", Assert.Single(report.Totals, total => total.Year == 2023).Amount);
         Assert.Equal("EUR", Assert.Single(report.Unresolved).Currency);
         Assert.Contains(report.Unresolved[0].Reasons, reason => reason.Contains("SEK"));
         Assert.Contains("Partial summary", report.Html);
@@ -469,27 +570,27 @@ public sealed class ImprovementServiceTests(PostgresFixture fixture)
     [InlineData("pending")]
     [InlineData("stale")]
     [InlineData("missingFacts")]
-    public async Task ExpenseReport_WholeReceiptOutsideTotals_WhenAnyPortionIsUnresolved(string scenario)
+    public async Task ExpenseReport_WholeReceiptOutsideTotals_WhenClassificationIsUnresolved(string scenario)
     {
         var receipt = await AddReceipt();
-        var review = new ReceiptReviewService(_db);
-        var saved = await review.ReviewAsync(receipt.Id, Review(receipt, Split(60), Split(40)), default);
-        Assert.Equal(ReceiptReviewStatus.Updated, saved.Status);
+        receipt.ImprovementExpenses.Add(LegacyPortion(receipt, Split()));
+        _db.ImprovementExpenses.AddRange(receipt.ImprovementExpenses);
+        await _db.SaveChangesAsync();
         var portions = receipt.ImprovementExpenses;
         switch (scenario)
         {
             case "unconfirmed": portions[0].ConfirmedAtUtc = null; break;
-            case "unallocated": portions[0].Amount = 59; break;
+            case "unallocated": portions[0].Amount = 99; break;
             case "pending": receipt.ProcessingStatus = ReceiptProcessingStatus.NeedsReview; break;
             case "stale": portions[0].ConfirmedReceiptVersion = -1; break;
-            default: portions[0].WorkDetails = null; break;
+            default: portions[0].Type = ImprovementType.Unclassified; break;
         }
         await _db.SaveChangesAsync();
         var report = await new ExpenseReportService(_db).GenerateAsync(receipt.PropertyId, default);
         Assert.Empty(report!.Included);
         Assert.Empty(report.Totals);
         Assert.Equal("0.00", report.IncludedTotal);
-        Assert.Equal(2, Assert.Single(report.Unresolved).Portions.Count);
+        Assert.Single(Assert.Single(report.Unresolved).Portions);
     }
 
     [Fact]

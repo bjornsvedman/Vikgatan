@@ -7,12 +7,12 @@ public sealed record ReceiptArchiveRequest(
     bool Undated = false,
     DateOnly? DateFrom = null,
     DateOnly? DateTo = null,
-    string? Category = null,
-    bool Uncategorized = false,
     string? Vendor = null,
     string? Currency = null,
     string? Status = null,
     string SortBy = "date",
     string Direction = "desc",
     int Page = 1,
-    int PageSize = 25);
+    int PageSize = 25,
+    Guid? ProjectId = null,
+    bool UnassignedProject = false);

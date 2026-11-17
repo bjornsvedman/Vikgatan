@@ -48,9 +48,9 @@ public static class ImprovementEndpoints
             var facts = await service.SaveSaleFactsAsync(propertyId, request, ct);
             return facts is null ? Results.NotFound() : Results.Ok(facts);
         });
-        group.MapGet("/expenses", async (Guid propertyId, ImprovementService service, CancellationToken ct) =>
+        group.MapGet("/expenses", async (Guid propertyId, Guid? projectId, bool? unassignedProject, ImprovementService service, CancellationToken ct) =>
         {
-            var expenses = await service.ListAsync(propertyId, ct);
+            var expenses = await service.ListAsync(propertyId, ct, projectId, unassignedProject ?? false);
             return expenses is null ? Results.NotFound() : Results.Ok(expenses);
         });
         group.MapGet("/readiness", async (Guid propertyId, ImprovementService service, CancellationToken ct) =>
@@ -58,14 +58,14 @@ public static class ImprovementEndpoints
             var readiness = await service.GetReadinessAsync(propertyId, ct);
             return readiness is null ? Results.NotFound() : Results.Ok(readiness);
         });
-        group.MapGet("/expense-report", async (Guid propertyId, ExpenseReportService service, CancellationToken ct) =>
+        group.MapGet("/expense-report", async (Guid propertyId, Guid? projectId, bool? unassignedProject, ExpenseReportService service, CancellationToken ct) =>
         {
-            var report = await service.GenerateAsync(propertyId, ct);
+            var report = await service.GenerateAsync(propertyId, ct, projectId, unassignedProject ?? false);
             return report is null ? Results.NotFound() : Results.Ok(report);
         });
-        group.MapGet("/expense-report/download", async (Guid propertyId, ExpenseReportService service, CancellationToken ct) =>
+        group.MapGet("/expense-report/download", async (Guid propertyId, Guid? projectId, bool? unassignedProject, ExpenseReportService service, CancellationToken ct) =>
         {
-            var report = await service.GenerateAsync(propertyId, ct);
+            var report = await service.GenerateAsync(propertyId, ct, projectId, unassignedProject ?? false);
             return report is null ? Results.NotFound()
                 : Results.File(System.Text.Encoding.UTF8.GetBytes(report.Html), "text/html; charset=utf-8",
                     $"expense-summary-{propertyId:N}.html");

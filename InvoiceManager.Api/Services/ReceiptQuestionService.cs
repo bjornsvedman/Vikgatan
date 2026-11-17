@@ -38,7 +38,9 @@ public sealed class ReceiptQuestionService(
     public async Task<ReceiptQuestionResponse> QueryAsync(
         string question,
         CancellationToken cancellationToken,
-        Guid propertyId)
+        Guid propertyId,
+        Guid? projectId = null,
+        bool unassignedProject = false)
     {
         if (propertyId == Guid.Empty)
         {
@@ -53,6 +55,7 @@ public sealed class ReceiptQuestionService(
                 nameof(question));
         }
 
+        await ProjectScope.ValidateAsync(dbContext, propertyId, projectId, unassignedProject, cancellationToken);
         var hasReceipts = await dbContext.Receipts
             .AsNoTracking()
             .AnyAsync(receipt => receipt.PropertyId == propertyId, cancellationToken);
@@ -67,19 +70,31 @@ public sealed class ReceiptQuestionService(
             logger.LogWarning("Foundry returned an unsupported receipt query plan.");
             return new("I couldn't safely interpret that question. Try asking about a specific receipt or total.", []);
         }
+        if (!string.IsNullOrWhiteSpace(plan.Project))
+        {
+            var normalizedName = plan.Project.Trim().ToUpperInvariant();
+            var namedId = await dbContext.Projects.Where(project => project.PropertyId == propertyId
+                && project.NormalizedName == normalizedName).Select(project => (Guid?)project.Id).SingleOrDefaultAsync(cancellationToken);
+            if (namedId is null) return new("No project exactly matches that name in this property. Select a project or clarify its name.", []);
+            if (unassignedProject || (projectId is Guid explicitId && explicitId != namedId))
+                return new("The named project conflicts with the selected scope. Select the intended project and ask again.", []);
+            projectId = namedId;
+        }
 
         var isReceiptLookup = ReceiptLookupPattern.IsMatch(normalizedQuestion);
         if (!isReceiptLookup && UnsupportedCalculationPattern.IsMatch(normalizedQuestion))
         {
-            return new("That calculation isn't supported yet. Ask for a spending total by year, vendor, or category.", []);
+            return new("That calculation isn't supported yet. Ask for a spending total by year, vendor, or project.", []);
         }
 
         if (plan.QueryType == "sum_total" || (!isReceiptLookup && TotalQuestionPattern.IsMatch(normalizedQuestion)))
         {
+            if (projectId is not null || unassignedProject || plan.GroupBy == "project")
+                return await new ProjectSpendingService(dbContext).AnswerAsync(plan, propertyId, projectId, unassignedProject, cancellationToken);
             return await AnswerTotalAsync(plan with { QueryType = "sum_total" }, cancellationToken, propertyId);
         }
 
-        var documents = await FindContextAsync(normalizedQuestion, cancellationToken, propertyId);
+        var documents = await FindContextAsync(normalizedQuestion, cancellationToken, propertyId, projectId, unassignedProject);
         if (documents.Count == 0)
         {
             return new("There are no receipts available to answer this question yet.", []);
@@ -99,8 +114,12 @@ public sealed class ReceiptQuestionService(
             return new("I couldn't verify an answer from the retrieved receipts.", []);
         }
 
+        var sourceReceipts = await ProjectScope.Apply(dbContext.Receipts.AsNoTracking()
+            .Include(receipt => receipt.LineItems).ThenInclude(item => item.Project)
+            .Where(receipt => receipt.PropertyId == propertyId && sourceIds.Contains(receipt.Id)), projectId, unassignedProject)
+            .ToDictionaryAsync(receipt => receipt.Id, cancellationToken);
         var sources = documents
-            .Where(document => sourceIds.Contains(document.Id))
+            .Where(document => sourceIds.Contains(document.Id) && sourceReceipts.ContainsKey(document.Id))
             .Select(document => new ReceiptQuestionCitation(
                 document.Id,
                 document.FileName,
@@ -108,21 +127,35 @@ public sealed class ReceiptQuestionService(
                 document.DocumentDate,
                 document.Currency,
                 document.TotalAmount,
-                Enum.Parse<ReceiptProcessingStatus>(document.Status)))
+                Enum.Parse<ReceiptProcessingStatus>(document.Status))
+            {
+                SourceProjects = ProjectScope.Names(sourceReceipts[document.Id]),
+                MatchedItems = sourceReceipts[document.Id].LineItems
+                    .Where(item => projectId is Guid id ? item.ProjectId == id : !unassignedProject || item.ProjectId == null)
+                    .Select(item => new ReceiptCalculationItem(item.Id, item.ReceiptId, document.FileName, item.Description,
+                        item.ProjectId, item.Project?.Name ?? "Unassigned", document.Currency ?? "Unknown currency",
+                        item.LineTotal?.ToString("0.00##", CultureInfo.InvariantCulture), "")).ToArray()
+            })
             .ToArray();
+        if (sources.Length == 0)
+        {
+            logger.LogWarning("Retrieved receipt citations changed before the answer completed.");
+            return new("The retrieved receipts changed while answering. Ask again using the current project scope.", []);
+        }
 
         var answer = UnsafeSemanticAnswerPattern.IsMatch(draft.Answer)
             ? "I found relevant receipts. Their stored details are available in the sources. Ask for a spending total for a database-calculated answer."
             : draft.Answer;
-        return new(answer, sources, sources.Length);
+        return new(projectId is not null || unassignedProject
+            ? answer + "\nSources may contain items from other projects; receipt totals are not project spending." : answer, sources, sources.Length);
     }
 
     private static bool IsValidPlan(ReceiptQueryPlan plan) =>
         plan.QueryType is "semantic" or "sum_total"
-        && plan.GroupBy is "none" or "year" or "vendor" or "category"
+        && plan.GroupBy is "none" or "year" or "vendor" or "project"
         && (plan.Year is null or >= 1900 and <= 2100)
         && (plan.Vendor is null or { Length: <= 256 })
-        && (plan.Category is null or { Length: <= 128 });
+        && (plan.Project is null or { Length: <= 128 });
 
     private async Task<ReceiptQuestionResponse> AnswerTotalAsync(
         ReceiptQueryPlan plan,
@@ -144,14 +177,6 @@ public sealed class ReceiptQuestionService(
             var normalizedVendor = vendor.ToLowerInvariant();
             query = query.Where(receipt => receipt.Vendor != null
                 && receipt.Vendor.ToLower() == normalizedVendor);
-        }
-
-        var category = plan.Category?.Trim();
-        if (!string.IsNullOrWhiteSpace(category))
-        {
-            var normalizedCategory = category.ToLowerInvariant();
-            query = query.Where(receipt => receipt.Category != null
-                && receipt.Category.ToLower() == normalizedCategory);
         }
 
         if (plan.Year is int year)
@@ -188,19 +213,6 @@ public sealed class ReceiptQuestionService(
                     group.Sum(receipt => receipt.TotalAmount ?? 0m),
                     group.Count()))
                 .ToListAsync(cancellationToken),
-            "category" => await query
-                .GroupBy(receipt => new
-                {
-                    Category = receipt.Category ?? "Uncategorized",
-                    Currency = receipt.Currency ?? "Unknown currency"
-                })
-                .Select(group => new SpendAggregate(
-                    null,
-                    group.Key.Category,
-                    group.Key.Currency,
-                    group.Sum(receipt => receipt.TotalAmount ?? 0m),
-                    group.Count()))
-                .ToListAsync(cancellationToken),
             _ => await query
                 .GroupBy(receipt => receipt.Currency ?? "Unknown currency")
                 .Select(group => new SpendAggregate(
@@ -216,7 +228,7 @@ public sealed class ReceiptQuestionService(
         {
             if (snapshot is not null) await snapshot.CommitAsync(cancellationToken);
             return new("No reviewed receipt totals matched those filters.", [], 0,
-                new(plan.Year, vendor, category, plan.GroupBy, true, [], []));
+                new(plan.Year, vendor, plan.GroupBy, true, [], []));
         }
 
         var matchingCount = aggregates.Sum(aggregate => aggregate.Count);
@@ -232,7 +244,7 @@ public sealed class ReceiptQuestionService(
             .Select(receipt => new
             {
                 receipt.Id, receipt.FileName, receipt.Vendor, receipt.DocumentDate,
-                receipt.Category, receipt.Currency, receipt.TotalAmount, receipt.ProcessingStatus
+                receipt.Currency, receipt.TotalAmount, receipt.ProcessingStatus
             })
             .ToListAsync(cancellationToken);
 
@@ -253,11 +265,11 @@ public sealed class ReceiptQuestionService(
                 aggregate.Amount.ToString("0.00##", CultureInfo.InvariantCulture), aggregate.Count))
             .ToArray();
         var contributions = sourceReceipts.Select(receipt => new ReceiptCalculationReceipt(
-            receipt.Id, receipt.FileName, receipt.Vendor, receipt.DocumentDate, receipt.Category,
+            receipt.Id, receipt.FileName, receipt.Vendor, receipt.DocumentDate,
             receipt.Currency ?? "Unknown currency",
             receipt.TotalAmount!.Value.ToString("0.00##", CultureInfo.InvariantCulture),
             AggregateLabel(plan.GroupBy, receipt.DocumentDate?.Year,
-                plan.GroupBy == "vendor" ? receipt.Vendor ?? "Unknown vendor" : receipt.Category ?? "Uncategorized")))
+                plan.GroupBy == "vendor" ? receipt.Vendor ?? "Unknown vendor" : null)))
             .ToArray();
         if (snapshot is not null) await snapshot.CommitAsync(cancellationToken);
 
@@ -267,13 +279,13 @@ public sealed class ReceiptQuestionService(
                 : answer,
             citations,
             matchingCount,
-            new(plan.Year, vendor, category, plan.GroupBy, true, totals, contributions));
+            new(plan.Year, vendor, plan.GroupBy, true, totals, contributions));
     }
 
     private static string AggregateLabel(string groupBy, int? year, string? label) => groupBy switch
     {
         "year" => year?.ToString(CultureInfo.InvariantCulture) ?? "Unknown year",
-        "vendor" or "category" => label ?? "Unknown",
+        "vendor" => label ?? "Unknown",
         _ => "Total recorded spend"
     };
 
@@ -290,10 +302,12 @@ public sealed class ReceiptQuestionService(
     private async Task<IReadOnlyList<ReceiptQuestionDocument>> FindContextAsync(
         string question,
         CancellationToken cancellationToken,
-        Guid propertyId)
+        Guid propertyId, Guid? projectId, bool unassignedProject)
     {
         var documents = new List<Receipt>();
-        var hasEmbeddings = await dbContext.Receipts
+        var scoped = ProjectScope.Apply(dbContext.Receipts.AsNoTracking().Where(receipt => receipt.PropertyId == propertyId),
+            projectId, unassignedProject);
+        var hasEmbeddings = await scoped
             .AsNoTracking()
             .AnyAsync(receipt => receipt.Embedding != null
                 && receipt.PropertyId == propertyId, cancellationToken);
@@ -308,7 +322,7 @@ public sealed class ReceiptQuestionService(
             }
 
             var queryVector = new Vector(vectorValues);
-            var semanticMatches = await dbContext.Receipts
+            var semanticMatches = await scoped
                 .AsNoTracking()
                 .Include(receipt => receipt.LineItems)
                 .Where(receipt => receipt.Embedding != null
@@ -325,7 +339,7 @@ public sealed class ReceiptQuestionService(
         if (remainingSlots > 0)
         {
             var includedIds = documents.Select(receipt => receipt.Id).ToArray();
-            var remainingDocuments = await dbContext.Receipts
+            var remainingDocuments = await scoped
                 .AsNoTracking()
                 .Include(receipt => receipt.LineItems)
                 .Where(receipt => !includedIds.Contains(receipt.Id)
@@ -344,17 +358,16 @@ public sealed class ReceiptQuestionService(
             receipt.DocumentDate,
             receipt.Currency,
             receipt.TotalAmount,
-            receipt.Category,
             receipt.Description,
             receipt.ProcessingStatus.ToString(),
             receipt.LineItems
+                .Where(item => projectId is Guid id ? item.ProjectId == id : !unassignedProject || item.ProjectId == null)
                 .Take(MaximumLineItemsPerDocument)
                 .Select(item => new ReceiptQuestionLineItem(
                     item.Description,
                     item.Quantity,
                     item.UnitPrice,
-                    item.LineTotal,
-                    item.Category))
+                    item.LineTotal))
                 .ToArray()))
             .ToArray();
     }

@@ -13,14 +13,27 @@ public sealed record ReceiptQuestionResponse(
 public sealed record ReceiptCalculation(
     int? Year,
     string? Vendor,
-    string? Category,
     string GroupBy,
     bool ReviewedOnly,
     IReadOnlyList<ReceiptCalculationTotal> Totals,
-    IReadOnlyList<ReceiptCalculationReceipt> Receipts);
+    IReadOnlyList<ReceiptCalculationReceipt> Receipts)
+{
+    public bool ItemBased { get; init; }
+    public string? ProjectScope { get; init; }
+    public IReadOnlyList<ReceiptCalculationItem> Items { get; init; } = [];
+    public IReadOnlyList<string> CoverageWarnings { get; init; } = [];
+}
+
+public sealed record ReceiptCalculationItem(
+    Guid Id, Guid ReceiptId, string FileName, string Description, Guid? ProjectId, string Project,
+    string Currency, string? Amount, string GroupLabel);
 
 /// <summary>A SQL-computed total; the invariant amount string preserves decimal precision.</summary>
-public sealed record ReceiptCalculationTotal(string Label, string Currency, string Amount, int ReceiptCount);
+public sealed record ReceiptCalculationTotal(string Label, string Currency, string Amount, int ReceiptCount)
+{
+    public Guid? ProjectId { get; init; }
+    public bool UnassignedProject { get; init; }
+}
 
 /// <summary>A stored amount contributing to a calculation, independently of summary citation limits.</summary>
 public sealed record ReceiptCalculationReceipt(
@@ -28,7 +41,6 @@ public sealed record ReceiptCalculationReceipt(
     string FileName,
     string? Vendor,
     DateOnly? DocumentDate,
-    string? Category,
     string Currency,
     string Amount,
     string GroupLabel);
@@ -41,4 +53,8 @@ public sealed record ReceiptQuestionCitation(
     DateOnly? DocumentDate,
     string? Currency,
     decimal? TotalAmount,
-    ReceiptProcessingStatus Status);
+    ReceiptProcessingStatus Status)
+{
+    public IReadOnlyList<string> SourceProjects { get; init; } = [];
+    public IReadOnlyList<ReceiptCalculationItem> MatchedItems { get; init; } = [];
+}

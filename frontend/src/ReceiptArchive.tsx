@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter, Pencil, RotateCcw, Trash2, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import type { Receipt, ReceiptStatus } from './ReviewDesk'
+import { ProjectSelect } from './Projects'
+import { projectParameters, receiptProjects, type Project } from './projectModel'
 import './ReceiptArchive.css'
 
 type ArchivePage = {
@@ -10,24 +12,24 @@ type ArchivePage = {
   page: number
   pageSize: number
   years: number[]
-  categories: string[]
   vendors: string[]
   currencies: string[]
+  projects: Project[]
 }
 
 type Filters = {
   year: string
   dateFrom: string
   dateTo: string
-  category: string
   vendor: string
   currency: string
   status: string
+  project: string
 }
 
-const emptyFilters: Filters = { year: '', dateFrom: '', dateTo: '', category: '', vendor: '', currency: '', status: '' }
+const emptyFilters: Filters = { year: '', dateFrom: '', dateTo: '', vendor: '', currency: '', status: '', project: '' }
 const filterLabels: Record<keyof Filters, string> = {
-  year: 'Year', dateFrom: 'From', dateTo: 'To', category: 'Category', vendor: 'Vendor', currency: 'Currency', status: 'Status',
+  year: 'Year', dateFrom: 'From', dateTo: 'To', vendor: 'Vendor', currency: 'Currency', status: 'Status', project: 'Project',
 }
 const statuses: ReceiptStatus[] = ['Completed', 'NeedsReview', 'Pending', 'Processing', 'Failed']
 
@@ -68,12 +70,10 @@ function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: 
   if (propertyId) parameters.set('propertyId', propertyId)
   if (applied.year === 'undated') parameters.set('undated', 'true')
   else if (applied.year) parameters.set('year', applied.year)
-  if (applied.category === 'uncategorized') parameters.set('uncategorized', 'true')
-  else if (applied.category) parameters.set('category', applied.category.slice('category:'.length))
   for (const key of ['dateFrom', 'dateTo', 'vendor', 'currency', 'status'] as const) {
     if (applied[key]) parameters.set(key, applied[key])
   }
-  const query = parameters.toString()
+  const query = `${parameters.toString()}&${projectParameters(applied.project)}`
 
   useEffect(() => {
     if (!active || !propertyId) return
@@ -126,7 +126,7 @@ function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: 
   }
 
   function filterValue(key: keyof Filters, value: string) {
-    if (key === 'category') return value === 'uncategorized' ? 'Uncategorized' : value.slice('category:'.length)
+    if (key === 'project') return result?.projects?.find(project => project.id === value)?.name ?? 'Unassigned'
     if (key === 'year' && value === 'undated') return 'Undated'
     if (key === 'status') return statusLabel(value)
     return value
@@ -169,14 +169,12 @@ function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: 
         <span role="status">{pending ? 'Loading receipts...' : error ? 'Archive unavailable' : `${result?.totalCount ?? 0} ${result?.totalCount === 1 ? 'receipt' : 'receipts'}`}</span>
       </div>
       <form className="archive-filters" onSubmit={applyFilters}>
+        <ProjectSelect projects={result?.projects ?? []} value={filters.project} onChange={value => setFilters({ ...filters, project: value })}
+          label="Project" all />
         <label><span id="archive-year-label">Year</span><select aria-labelledby="archive-year-label" value={filters.year} onChange={(event) => setFilters({ ...filters, year: event.target.value, dateFrom: '', dateTo: '' })}>
           <option value="">All years</option>
           {result?.years.map((year) => <option key={year} value={year}>{year}</option>)}
           <option value="undated">Undated</option>
-        </select></label>
-        <label><span id="archive-category-label">Category</span><select aria-labelledby="archive-category-label" value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })}>
-          <option value="">All categories</option><option value="uncategorized">Uncategorized</option>
-          {result?.categories.map((category) => <option key={category} value={`category:${category}`}>{category}</option>)}
         </select></label>
         <label><span id="archive-vendor-label">Vendor</span><select aria-labelledby="archive-vendor-label" value={filters.vendor} onChange={(event) => setFilters({ ...filters, vendor: event.target.value })}>
           <option value="">All vendors</option>
@@ -197,6 +195,7 @@ function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: 
           <button type="button" className="archive-icon" title="Clear all filters" aria-label="Clear all filters" onClick={clearFilters}><RotateCcw size={17} /></button>
         </div>
       </form>
+      {applied.project && <p>Receipts containing matching items. Amounts shown are whole receipt totals, not project-only spending.</p>}
       {activeFilters.length > 0 && <div className="archive-active-filters" aria-label="Active filters">
         {activeFilters.map(([key, value]) => <button type="button" key={key} onClick={() => removeFilter(key)} title={`Remove ${filterLabels[key]} filter`}>
           {filterLabels[key]}: {filterValue(key, value)}<X size={13} aria-hidden="true" />
@@ -206,7 +205,7 @@ function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: 
         <span>By document year</span>
         <div>
           <label><span id="archive-sort-label">Sort within year</span><select aria-labelledby="archive-sort-label" value={sortBy} onChange={(event) => { setSortBy(event.target.value); setPage(1) }}>
-            <option value="date">Document date</option><option value="category">Category</option><option value="vendor">Vendor</option><option value="amount">Amount</option>
+            <option value="date">Document date</option><option value="vendor">Vendor</option><option value="amount">Amount</option>
           </select></label>
           <button type="button" className="archive-icon" aria-label={direction === 'asc' ? 'Sort descending' : 'Sort ascending'} title={direction === 'asc' ? 'Ascending; switch to descending' : 'Descending; switch to ascending'} onClick={() => { setDirection(direction === 'asc' ? 'desc' : 'asc'); setPage(1) }}>
             {direction === 'asc' ? <ArrowUp size={18} /> : <ArrowDown size={18} />}
@@ -224,12 +223,13 @@ function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: 
             <section className="archive-year" key={year} aria-label={`${year} receipts`}>
               <h3>{year}</h3>
               <div className="archive-table-scroll"><table className="archive-table">
-                <thead><tr><th scope="col">Receipt</th><th scope="col">Date</th><th scope="col">Category</th><th scope="col">Amount</th><th scope="col">Status</th></tr></thead>
+                <thead><tr><th scope="col">Receipt</th><th scope="col">Date</th><th scope="col">Projects</th><th scope="col">Receipt total</th><th scope="col">Status</th></tr></thead>
                 <tbody>{receipts.map((receipt) => <tr key={receipt.id} className={selected?.id === receipt.id ? 'is-selected' : ''}>
                   <td><button className="archive-receipt-link" type="button" onClick={(event) => { triggerRef.current = event.currentTarget; setSelected(receipt) }} aria-label={`Open receipt ${receipt.vendor || receipt.fileName}`}>
                     <FileText size={19} aria-hidden="true" /><span><strong>{receipt.vendor || 'Vendor not set'}</strong><small>{receipt.fileName}</small></span>
                   </button></td>
-                  <td>{receipt.documentDate ?? 'Not set'}</td><td>{receipt.category || 'Uncategorized'}</td>
+                  <td>{receipt.documentDate ?? 'Not set'}</td>
+                  <td>{receiptProjects(receipt)}</td>
                   <td className="archive-amount">{amountLabel(receipt.totalAmount, receipt.currency)}</td>
                   <td><span className={`status-mark status-${receipt.status.toLowerCase()}`}>{statusLabel(receipt.status)}</span></td>
                 </tr>)}</tbody>
@@ -253,7 +253,7 @@ function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: 
           {selected.status === 'Completed' && <Link className="archive-original" to={`/archive/${selected.id}/edit`}><Pencil size={16} aria-hidden="true" />Edit receipt</Link>}
           <dl className="archive-metadata">
             <div><dt>Date</dt><dd>{selected.documentDate ?? 'Not set'}</dd></div>
-            <div><dt>Category</dt><dd>{selected.category || 'Uncategorized'}</dd></div>
+            <div><dt>Source projects</dt><dd>{receiptProjects(selected)}</dd></div>
             <div><dt>Amount</dt><dd>{amountLabel(selected.totalAmount, selected.currency)}</dd></div>
             <div><dt>Status</dt><dd>{statusLabel(selected.status)}</dd></div>
           </dl>
@@ -264,7 +264,7 @@ function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: 
               : <img src={`/api/documents/${selected.id}/file`} alt={`Original ${selected.fileName}`} />}
           </div>
           {selected.lineItems.length > 0 && <div className="archive-line-items"><h4>Line items</h4>
-            {selected.lineItems.map((item) => <div key={item.id}><span>{item.description}<small>{item.quantity !== null ? `Quantity: ${item.quantity}` : ''}{item.category ? ` / ${item.category}` : ''}{item.unitPrice !== null ? ` / Unit: ${amountLabel(item.unitPrice, selected.currency)}` : ''}</small></span><strong>{amountLabel(item.lineTotal, selected.currency)}</strong></div>)}
+            {selected.lineItems.map((item) => <div key={item.id}><span>{item.description}<small>Project: {item.projectName ?? 'Unassigned'} · {item.quantity !== null ? `Quantity: ${item.quantity}` : ''}{item.unitPrice !== null ? ` / Unit: ${amountLabel(item.unitPrice, selected.currency)}` : ''}</small></span><strong>{amountLabel(item.lineTotal, selected.currency)}</strong></div>)}
           </div>}
         </aside>}
       </div>
