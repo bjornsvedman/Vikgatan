@@ -747,7 +747,7 @@ function ReviewDesk() {
       </nav>
 
       <main className="page-content">
-        <section className="page-heading">
+        {view !== 'archive' && <section className="page-heading">
           <div>
             <p className="eyebrow">{view === 'home' ? 'RENOVATION ARCHIVE' : 'DOCUMENTS'}</p>
             <h1 id="page-title">{pageTitle}</h1>
@@ -773,7 +773,7 @@ function ReviewDesk() {
               <span>new</span>
             </div>
           </div>}
-        </section>
+        </section>}
 
         {error && <div className="message message-error" role="alert">{error}</div>}
         {notice && <div className="message message-success" role="status">{notice}</div>}

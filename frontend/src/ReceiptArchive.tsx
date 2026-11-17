@@ -164,8 +164,8 @@ function ReceiptArchive({ active, propertyId, refreshVersion, updatedReceipt }: 
 
   return (
     <section className="archive-view" id="archive-panel" aria-labelledby="page-title" hidden={!active}>
+      <h1 className="sr-only" id="page-title">Receipt archive</h1>
       <div className="archive-heading">
-        <h2>All receipts</h2>
         <span role="status">{pending ? 'Loading receipts...' : error ? 'Archive unavailable' : `${result?.totalCount ?? 0} ${result?.totalCount === 1 ? 'receipt' : 'receipts'}`}</span>
       </div>
       <form className="archive-filters" onSubmit={applyFilters}>
