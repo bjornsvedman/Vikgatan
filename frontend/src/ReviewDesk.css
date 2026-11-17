@@ -1067,6 +1067,14 @@ h3 {
   width: 100%;
 }
 
+.receipt-wide-choices > .project-select label {
+  gap: 6px;
+  color: #66736b;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 650;
+}
+
 .receipt-wide-choices > .project-select select {
   box-sizing: border-box;
   min-width: 0;
