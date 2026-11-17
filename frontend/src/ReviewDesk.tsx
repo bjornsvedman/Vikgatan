@@ -111,6 +111,23 @@ type FolderImportReport = {
 
 const supportedReceiptExtensions = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.webp'])
 const mixedProjectsValue = '__mixed_projects__'
+type SaveIssueField = 'vendor' | 'documentDate' | 'currency' | 'totalAmount' | 'description' | 'project' | 'classification' | 'lineItems'
+
+function saveIssueFields(message: string): SaveIssueField[] {
+  const text = message.toLowerCase()
+  const fields: SaveIssueField[] = []
+  if (text.includes('vendor')) fields.push('vendor')
+  if (text.includes('document date')) fields.push('documentDate')
+  if (text.includes('currency') || text.includes('sek')) fields.push('currency')
+  if (text.includes('total amount') || text.includes('receipt total') || text.includes('amount must equal')) fields.push('totalAmount')
+  if (text.includes('project')) fields.push('project')
+  if (text.includes('classification') || text.includes('expense')) fields.push('classification')
+  if (text.includes('line item')) fields.push('lineItems')
+  if (text.includes('description') && !fields.includes('classification')) fields.push('description')
+  const fieldOrder: SaveIssueField[] = ['vendor', 'documentDate', 'totalAmount', 'currency', 'description',
+    'project', 'classification', 'lineItems']
+  return [...new Set(fields)].sort((left, right) => fieldOrder.indexOf(left) - fieldOrder.indexOf(right))
+}
 
 function sharedProjectId(lineItems: ReceiptLineItem[]) {
   if (lineItems.length === 0) return ''
@@ -179,12 +196,15 @@ function ReviewDesk() {
   const [uploading, setUploading] = useState(false)
   const [folderImport, setFolderImport] = useState<FolderImportReport | null>(null)
   const [error, setError] = useState('')
+  const [saveError, setSaveError] = useState('')
+  const [saveIssues, setSaveIssues] = useState<SaveIssueField[]>([])
   const [notice, setNotice] = useState('')
   const [question, setQuestion] = useState('')
   const [questionResponse, setQuestionResponse] = useState<ReceiptQuestionResponse | null>(null)
   const [asking, setAsking] = useState(false)
   const projectsState = useProjects(selectedPropertyId, requestToken)
   const questionController = useRef<AbortController | null>(null)
+  const editFormRef = useRef<HTMLFormElement | null>(null)
   useEffect(() => () => questionController.current?.abort(), [selectedPropertyId])
   const folderImportController = useRef<AbortController | null>(null)
   const draft = editId ? editDraft : reviewDraft
@@ -261,6 +281,7 @@ function ReviewDesk() {
       setEditReceipt(null)
       setEditDraft(null)
       setError('')
+      setSaveError('')
       setNotice('')
       try {
         const response = await fetch(`/api/documents/${encodeURIComponent(editId!)}`, { signal: controller.signal })
@@ -351,6 +372,7 @@ function ReviewDesk() {
     setSelectedId(receipt.id)
     setReviewDraft(toDraft(receipt))
     setError('')
+    setSaveError('')
     setNotice('')
   }
 
@@ -553,14 +575,30 @@ function ReviewDesk() {
     } : current)
   }
 
+  function showSaveError(message: string) {
+    const issues = saveIssueFields(message)
+    setSaveError(message)
+    setSaveIssues(issues)
+    const firstIssue = issues[0]
+    if (!firstIssue) return
+    requestAnimationFrame(() => {
+      const field = editFormRef.current?.querySelector<HTMLElement>(`[data-save-field="${firstIssue}"]`)
+      const target = field?.querySelector<HTMLElement>('input, select, textarea, button') ?? field
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      target?.focus({ preventScroll: true })
+    })
+  }
+
   async function saveReview(markReviewed: boolean) {
     if (!selectedReceipt || !draft || !requestToken) return
     if (draft.projectId === mixedProjectsValue) {
-      setError('Choose one project for this receipt before saving.')
+      showSaveError('Choose one project for this receipt before saving.')
       return
     }
 
     setSaving(true)
+    setSaveError('')
+    setSaveIssues([])
     setError('')
     setNotice('')
     try {
@@ -609,7 +647,7 @@ function ReviewDesk() {
         await refreshQueue(markReviewed ? undefined : updated.id)
       }
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Could not save this review.')
+      showSaveError(requestError instanceof Error ? requestError.message : 'Could not save this review.')
     } finally {
       setSaving(false)
     }
@@ -878,7 +916,7 @@ function ReviewDesk() {
                 {editId ? <Link to="/archive">Back to archive</Link> : <p>Upload a file or choose an item from the queue.</p>}
               </div>
             ) : (
-              <form aria-busy={saving} inert={saving} onSubmit={(event) => { event.preventDefault(); void saveReview(false) }}>
+              <form ref={editFormRef} aria-busy={saving} inert={saving} onSubmit={(event) => { event.preventDefault(); void saveReview(false) }}>
                 <div className="detail-heading">
                   <div className="document-title">
                     <span className="file-type">{selectedReceipt.fileName.split('.').pop()?.toUpperCase() ?? 'FILE'}</span>
@@ -918,22 +956,29 @@ function ReviewDesk() {
                     <h3>Document details</h3>
                   </div>
                   <div className="field-grid">
-                    <label className="field field-wide">
+                    <label className={`field field-wide${saveIssues.includes('vendor') ? ' save-field-invalid' : ''}`} data-save-field="vendor">
                       <span>Vendor</span>
-                      <input value={draft.vendor} onChange={(event) => updateDraft('vendor', event.target.value)} maxLength={256} />
+                      <input aria-invalid={saveIssues.includes('vendor')} value={draft.vendor} onChange={(event) => updateDraft('vendor', event.target.value)} maxLength={256} />
+                      {saveIssues.includes('vendor') && <span className="field-error-hint">Review the vendor value.</span>}
                     </label>
-                    <label className="field">
+                    <label className={`field${saveIssues.includes('documentDate') ? ' save-field-invalid' : ''}`} data-save-field="documentDate">
                       <span>Document date</span>
-                      <input type="date" value={draft.documentDate} onChange={(event) => updateDraft('documentDate', event.target.value)} />
+                      <input aria-invalid={saveIssues.includes('documentDate')} type="date" value={draft.documentDate} onChange={(event) => updateDraft('documentDate', event.target.value)} />
+                      {saveIssues.includes('documentDate') && <span className="field-error-hint">Review the document date.</span>}
                     </label>
-                    <label className="field">
+                    <label className={`field${saveIssues.includes('totalAmount') ? ' save-field-invalid' : ''}`} data-save-field="totalAmount">
                       <span>Total amount</span>
                       <div className="money-input">
-                        <input type="number" min="0" step="0.0001" value={draft.totalAmount} onChange={(event) => updateDraft('totalAmount', event.target.value)} />
+                        <input aria-invalid={saveIssues.includes('totalAmount')} type="number" min="0" step="0.0001" value={draft.totalAmount} onChange={(event) => updateDraft('totalAmount', event.target.value)} />
                         <input className="currency-input" aria-label="Currency" value="SEK" readOnly />
                       </div>
+                      {saveIssues.includes('totalAmount') && <span className="field-error-hint">Review the receipt total.</span>}
                     </label>
-                    <p className="field-wide">This first version supports SEK only. No currency conversions.</p>
+                    <div className={`field-wide${saveIssues.includes('currency') ? ' save-field-invalid' : ''}`}
+                      data-save-field="currency" tabIndex={saveIssues.includes('currency') ? -1 : undefined}>
+                      <p>This first version supports SEK only. No currency conversions.</p>
+                      {saveIssues.includes('currency') && <span className="field-error-hint">Review the receipt currency.</span>}
+                    </div>
                     {(draft.currency !== 'SEK' || draft.expenses.some(expense => expense.currency !== 'SEK')) && <div className="message message-error field-wide" role="status">
                       <p>Stored receipt currency: {draft.currency || 'not set'}. Some amounts are not SEK and cannot be approved or included in confirmed report totals. Their original currency is preserved.</p>
                       <button type="button" className="text-button" onClick={() => {
@@ -943,9 +988,10 @@ function ReviewDesk() {
                         } : current)
                       }}>Correct a misread currency to SEK</button>
                     </div>}
-                    <label className="field field-wide">
+                    <label className={`field field-wide${saveIssues.includes('description') ? ' save-field-invalid' : ''}`} data-save-field="description">
                       <span>Description</span>
-                      <textarea rows={3} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} maxLength={4000} />
+                      <textarea aria-invalid={saveIssues.includes('description')} rows={3} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} maxLength={4000} />
+                      {saveIssues.includes('description') && <span className="field-error-hint">Review the description.</span>}
                     </label>
                   </div>
                 </div>
@@ -957,26 +1003,36 @@ function ReviewDesk() {
                   </div>
                   <p className="project-summary">These two choices apply to this receipt and all its line items.</p>
                   <div className="receipt-wide-choices">
-                    <ProjectSelect projects={projectsState.projects} value={draft.projectId}
-                      onChange={updateReceiptProject}
-                      label="Project for this receipt" disabled={projectsState.loading || projectsState.saving}
-                      placeholder={draft.projectId === mixedProjectsValue ? { value: mixedProjectsValue, label: 'Mixed projects — choose one' } : undefined} />
-                    <ExpenseReview key={selectedReceipt.id} receipt={{ ...selectedReceipt, currency: draft.currency, totalAmountExact: draft.totalAmount,
-                      description: draft.description, vendor: draft.vendor }} expenses={draft.expenses}
-                      onChange={expenses => updateDraft('expenses', expenses)} disabled={saving} />
+                    <div className={saveIssues.includes('project') ? 'save-field-invalid' : ''} data-save-field="project">
+                      <ProjectSelect projects={projectsState.projects} value={draft.projectId}
+                        onChange={updateReceiptProject}
+                        label="Project for this receipt" disabled={projectsState.loading || projectsState.saving}
+                        invalid={saveIssues.includes('project')}
+                        placeholder={draft.projectId === mixedProjectsValue ? { value: mixedProjectsValue, label: 'Mixed projects — choose one' } : undefined} />
+                      {saveIssues.includes('project') && <span className="field-error-hint">Choose a project for this receipt.</span>}
+                    </div>
+                    <div className={saveIssues.includes('classification') ? 'save-field-invalid' : ''} data-save-field="classification">
+                      <ExpenseReview key={selectedReceipt.id} receipt={{ ...selectedReceipt, currency: draft.currency, totalAmountExact: draft.totalAmount,
+                        description: draft.description, vendor: draft.vendor }} expenses={draft.expenses}
+                        onChange={expenses => updateDraft('expenses', expenses)} disabled={saving}
+                        invalid={saveIssues.includes('classification')} />
+                      {saveIssues.includes('classification') && <span className="field-error-hint">Choose or review the receipt classification.</span>}
+                    </div>
                   </div>
                   {projectsState.error && <p className="message message-error" role="alert">{projectsState.error}</p>}
                   {draft.projectId === mixedProjectsValue && <p className="project-summary" role="alert">
                     This receipt currently has mixed project assignments. Choose one project above to apply it to every line item.
                   </p>}
                   {draft.lineItems.length === 0 ? (
-                    <div className="line-items-empty"><p>No itemized details. Assigning a project adds one item for the full receipt amount.</p>
+                    <div className={`line-items-empty${saveIssues.includes('lineItems') ? ' save-field-invalid' : ''}`}
+                      data-save-field="lineItems" tabIndex={saveIssues.includes('lineItems') ? -1 : undefined}>
+                      <p>No itemized details. Assigning a project adds one item for the full receipt amount.</p>
                       <button type="button" className="text-button" onClick={() => setDraft(current => current && current.lineItems.length === 0 ? {
                         ...current, expenses: current.expenses.map(expense => ({ ...expense, confirm: false })),
                         lineItems: [wholeReceiptLineItem(current)],
                       } : current)}>Create one item for the whole receipt amount</button></div>
                   ) : (
-                    <div className="line-items-list">
+                    <div className={`line-items-list${saveIssues.includes('lineItems') ? ' save-field-invalid' : ''}`} data-save-field="lineItems">
                       <table className="line-items-table">
                         <caption className="sr-only">Editable receipt line items</caption>
                         <thead>
@@ -1017,8 +1073,10 @@ function ReviewDesk() {
                       </table>
                     </div>
                   )}
+                  {saveIssues.includes('lineItems') && <span className="field-error-hint">Review the receipt line items.</span>}
                 </div>
 
+                {saveError && <div className="message message-error save-error" role="alert">{saveError}</div>}
                 <div className="form-actions">
                   <span className="save-note">Changes are saved to your local archive.</span>
                   <div>

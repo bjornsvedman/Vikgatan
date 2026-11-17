@@ -1067,18 +1067,18 @@ h3 {
 .receipt-wide-choices {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: end;
+  align-items: start;
   gap: 16px;
   margin: 10px 0 18px;
 }
 
-.receipt-wide-choices > .project-select,
-.receipt-wide-choices > .project-select label {
+.receipt-wide-choices .project-select,
+.receipt-wide-choices .project-select label {
   min-width: 0;
   width: 100%;
 }
 
-.receipt-wide-choices > .project-select label {
+.receipt-wide-choices .project-select label {
   gap: 6px;
   color: #66736b;
   font-family: inherit;
@@ -1086,7 +1086,7 @@ h3 {
   font-weight: 650;
 }
 
-.receipt-wide-choices > .project-select select {
+.receipt-wide-choices .project-select select {
   box-sizing: border-box;
   min-width: 0;
   width: 100%;
@@ -1105,6 +1105,37 @@ h3 {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 3px;
+}
+
+.save-field-invalid input,
+.save-field-invalid select,
+.save-field-invalid textarea {
+  border-color: var(--rust) !important;
+  box-shadow: none;
+}
+
+.save-field-invalid[data-save-field="currency"] {
+  outline: 1px solid var(--rust);
+  outline-offset: 3px;
+}
+
+.line-items-list.save-field-invalid {
+  outline: 1px solid var(--rust);
+  outline-offset: 3px;
+}
+
+.line-items-empty.save-field-invalid {
+  padding: 8px;
+  outline: 1px solid var(--rust);
+  outline-offset: 2px;
+}
+
+.field-error-hint {
+  display: block;
+  margin-top: 5px;
+  color: #813b2c;
+  font-size: 11px;
+  font-weight: 650;
 }
 
 @media (max-width: 700px) {

@@ -3,12 +3,12 @@ import { Check, FolderKanban, Pencil, X } from 'lucide-react'
 import { type Project, unassignedProject, type useProjects } from './projectModel'
 import './Projects.css'
 
-export function ProjectSelect({ projects, value, onChange, label, all = false, disabled = false, placeholder }: {
+export function ProjectSelect({ projects, value, onChange, label, all = false, disabled = false, invalid = false, placeholder }: {
   projects: Project[], value: string, onChange: (value: string) => void, label: string,
-  all?: boolean, disabled?: boolean, placeholder?: { value: string, label: string },
+  all?: boolean, disabled?: boolean, invalid?: boolean, placeholder?: { value: string, label: string },
 }) {
   return <div className="project-select">
-    <label>{label}<select value={value} onChange={event => onChange(event.target.value)} disabled={disabled}>
+    <label>{label}<select value={value} onChange={event => onChange(event.target.value)} disabled={disabled} aria-invalid={invalid || undefined}>
       {placeholder && <option value={placeholder.value}>{placeholder.label}</option>}
       {all && <option value="">All projects</option>}
       <option value={all ? unassignedProject : ''}>Unassigned</option>

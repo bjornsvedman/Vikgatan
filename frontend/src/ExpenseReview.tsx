@@ -11,8 +11,8 @@ const improvementTypes: { value: ImprovementType, label: string }[] = [
   { value: 'Excluded', label: 'Excluded / not deductible' },
 ]
 
-export default function ExpenseReview({ receipt, expenses, onChange, disabled }: {
-  receipt: Receipt, expenses: ExpenseDraft[], onChange: (expenses: ExpenseDraft[]) => void, disabled: boolean,
+export default function ExpenseReview({ receipt, expenses, onChange, disabled, invalid = false }: {
+  receipt: Receipt, expenses: ExpenseDraft[], onChange: (expenses: ExpenseDraft[]) => void, disabled: boolean, invalid?: boolean,
 }) {
   const selectedType = expenses.length === 0 ? ''
     : expenses.length === 1 ? expenses[0].type
@@ -32,9 +32,9 @@ export default function ExpenseReview({ receipt, expenses, onChange, disabled }:
     }
   }
 
-  return <label className="field receipt-classification-type">
+  return <label className={`field receipt-classification-type${invalid ? ' save-field-invalid' : ''}`}>
     <span>Classification for the entire receipt</span>
-    <select value={selectedType} disabled={disabled}
+    <select value={selectedType} disabled={disabled} aria-invalid={invalid || undefined}
       onChange={event => event.target.value !== legacyClassificationsValue
         && chooseClassification(event.target.value as ImprovementType)}>
       {selectedType === legacyClassificationsValue
