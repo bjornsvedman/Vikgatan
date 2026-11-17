@@ -138,6 +138,16 @@ function toDraft(receipt: Receipt): ReviewDraft {
   }
 }
 
+function wholeReceiptLineItem(draft: ReviewDraft): DraftLineItem {
+  return {
+    key: crypto.randomUUID(),
+    description: draft.description || draft.vendor || 'Whole receipt',
+    quantity: '1',
+    unitPrice: draft.totalAmount,
+    lineTotal: draft.totalAmount,
+  }
+}
+
 async function responseError(response: Response): Promise<Error> {
   try {
     const problem = (await response.json()) as ApiProblem
@@ -502,7 +512,14 @@ function ReviewDesk() {
   }
 
   function updateReceiptProject(projectId: string) {
-    setDraft(current => current ? { ...current, projectId } : current)
+    setDraft(current => current ? {
+      ...current,
+      projectId,
+      ...(projectId && current.lineItems.length === 0 ? {
+        expenses: current.expenses.map(expense => ({ ...expense, confirm: false })),
+        lineItems: [wholeReceiptLineItem(current)],
+      } : {}),
+    } : current)
   }
 
   function updateLineItem(index: number, patch: Partial<DraftLineItem>) {
@@ -953,11 +970,10 @@ function ReviewDesk() {
                     This receipt currently has mixed project assignments. Choose one project above to apply it to every line item.
                   </p>}
                   {draft.lineItems.length === 0 ? (
-                    <div className="line-items-empty"><p>No itemized details.</p>
+                    <div className="line-items-empty"><p>No itemized details. Assigning a project adds one item for the full receipt amount.</p>
                       <button type="button" className="text-button" onClick={() => setDraft(current => current && current.lineItems.length === 0 ? {
                         ...current, expenses: current.expenses.map(expense => ({ ...expense, confirm: false })),
-                        lineItems: [{ key: crypto.randomUUID(), description: current.description || current.vendor || 'Whole receipt',
-                          quantity: '1', unitPrice: current.totalAmount, lineTotal: current.totalAmount }],
+                        lineItems: [wholeReceiptLineItem(current)],
                       } : current)}>Create one item for the whole receipt amount</button></div>
                   ) : (
                     <div className="line-items-list">
