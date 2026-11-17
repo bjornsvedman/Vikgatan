@@ -952,9 +952,6 @@ function ReviewDesk() {
                   {draft.projectId === mixedProjectsValue && <p className="project-summary" role="alert">
                     This receipt currently has mixed project assignments. Choose one project above to apply it to every line item.
                   </p>}
-                  {draft.projectId !== mixedProjectsValue && <p className="project-summary">
-                    All line items on this receipt share one project. Assignments are optional.
-                  </p>}
                   {draft.lineItems.length === 0 ? (
                     <div className="line-items-empty"><p>No itemized details.</p>
                       <button type="button" className="text-button" onClick={() => setDraft(current => current && current.lineItems.length === 0 ? {
@@ -964,27 +961,44 @@ function ReviewDesk() {
                       } : current)}>Create one item for the whole receipt amount</button></div>
                   ) : (
                     <div className="line-items-list">
-                      {draft.lineItems.map((item, index) => (
-                        <div className="line-item-row" key={item.key}>
-                          <label className="field line-description">
-                            <span>Description</span>
-                            <input value={item.description} onChange={(event) => updateLineItem(index, { description: event.target.value })} maxLength={1000} />
-                          </label>
-                          <label className="field line-quantity">
-                            <span>Qty</span>
-                            <input type="number" min="0" step="0.0001" value={item.quantity} onChange={(event) => updateLineItem(index, { quantity: event.target.value })} />
-                          </label>
-                          <label className="field line-unit-price">
-                            <span>Unit price</span>
-                            <input type="number" min="0" step="0.0001" value={item.unitPrice} onChange={(event) => updateLineItem(index, { unitPrice: event.target.value })} />
-                          </label>
-                          <label className="field line-amount">
-                            <span>Line total</span>
-                            <input type="number" min="0" step="0.0001" value={item.lineTotal} onChange={(event) => updateLineItem(index, { lineTotal: event.target.value })} />
-                          </label>
-                          <button className="remove-button" type="button" aria-label={`Remove ${item.description || `line item ${index + 1}`}`} onClick={() => removeLineItem(index)}>Remove</button>
-                        </div>
-                      ))}
+                      <table className="line-items-table">
+                        <caption className="sr-only">Editable receipt line items</caption>
+                        <thead>
+                          <tr>
+                            <th scope="col">Description</th>
+                            <th scope="col">Qty</th>
+                            <th scope="col">Unit price</th>
+                            <th scope="col">Line total</th>
+                            <th scope="col"><span className="sr-only">Actions</span></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {draft.lineItems.map((item, index) => (
+                            <tr key={item.key}>
+                              <td>
+                                <input aria-label={`Item ${index + 1} description`} value={item.description}
+                                  onChange={(event) => updateLineItem(index, { description: event.target.value })} maxLength={1000} />
+                              </td>
+                              <td>
+                                <input aria-label={`Item ${index + 1} quantity`} type="number" min="0" step="0.0001"
+                                  value={item.quantity} onChange={(event) => updateLineItem(index, { quantity: event.target.value })} />
+                              </td>
+                              <td>
+                                <input aria-label={`Item ${index + 1} unit price`} type="number" min="0" step="0.0001"
+                                  value={item.unitPrice} onChange={(event) => updateLineItem(index, { unitPrice: event.target.value })} />
+                              </td>
+                              <td>
+                                <input aria-label={`Item ${index + 1} line total`} type="number" min="0" step="0.0001"
+                                  value={item.lineTotal} onChange={(event) => updateLineItem(index, { lineTotal: event.target.value })} />
+                              </td>
+                              <td>
+                                <button className="remove-button" type="button"
+                                  aria-label={`Remove ${item.description || `line item ${index + 1}`}`} onClick={() => removeLineItem(index)}>Remove</button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   )}
                 </div>
