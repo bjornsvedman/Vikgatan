@@ -1061,6 +1061,20 @@ h3 {
   margin: 10px 0 18px;
 }
 
+.receipt-wide-choices > .project-select,
+.receipt-wide-choices > .project-select label {
+  min-width: 0;
+  width: 100%;
+}
+
+.receipt-wide-choices > .project-select select {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+
 .receipt-classification-type {
   margin: 0;
 }
