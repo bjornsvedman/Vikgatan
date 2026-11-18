@@ -43,6 +43,16 @@ dotnet run --project InvoiceManager.Api
 
 API local settings and credentials should be supplied through .NET User Secrets or the organization's approved identity configuration. Do not commit credentials or real receipt files.
 
+## Start the app (Windows)
+
+After the one-time `.env` and User Secrets setup above, start everything with either:
+
+```powershell
+.\start.ps1
+```
+
+Or double-click `start.cmd`. The launcher starts Docker Desktop if needed, brings up PostgreSQL, applies database migrations, starts the API and frontend in separate PowerShell windows, checks the frontend's API proxy, and opens the app at <http://127.0.0.1:5173/>. Close the API and frontend windows to stop those processes; PostgreSQL remains running until stopped with `docker compose stop`.
+
 ## Microsoft Foundry embeddings
 
 The embedding provider calls the Azure OpenAI-compatible `/openai/v1/embeddings` route. Keep the approved resource endpoint and deployment name in User Secrets, not source files:
