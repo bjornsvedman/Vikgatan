@@ -904,6 +904,33 @@ h3 {
   border-bottom: 1px solid var(--line);
 }
 
+.workbench.is-editing .edit-form-section {
+  margin: 18px 0;
+  padding: 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fcfdfb;
+  box-shadow: 0 6px 18px rgba(33, 54, 43, 0.035);
+}
+
+.workbench.is-editing .section-label h3 {
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.workbench.is-editing .edit-receipt-wide-section .section-label {
+  margin-bottom: 6px;
+}
+
+.workbench.is-editing .edit-scope-note {
+  margin: 0 0 16px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .section-label,
 .section-label-action,
 .section-label-action > div {
@@ -1072,6 +1099,27 @@ h3 {
   margin: 10px 0 18px;
 }
 
+.workbench.is-editing .edit-receipt-wide-section .receipt-wide-choices {
+  margin-top: 0;
+}
+
+.workbench.is-editing .edit-line-items-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.workbench.is-editing .edit-line-items-heading h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.35;
+}
+
 .receipt-wide-choices .project-select,
 .receipt-wide-choices .project-select label {
   min-width: 0;
@@ -1141,6 +1189,16 @@ h3 {
 @media (max-width: 700px) {
   .receipt-wide-choices {
     grid-template-columns: 1fr;
+  }
+
+  .workbench.is-editing .edit-form-section {
+    margin: 12px 0;
+    padding: 18px 16px;
+  }
+
+  .workbench.is-editing .edit-line-items-heading {
+    margin-top: 18px;
+    padding-top: 16px;
   }
 }
 

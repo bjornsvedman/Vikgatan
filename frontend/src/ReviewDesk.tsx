@@ -950,9 +950,9 @@ function ReviewDesk() {
                   </div>
                 )}
 
-                <div className="form-section">
+                <div className={`form-section${editId ? ' edit-form-section' : ''}`}>
                   <div className="section-label">
-                    <span>01</span>
+                    {!editId && <span>01</span>}
                     <h3>Document details</h3>
                   </div>
                   <div className="field-grid">
@@ -996,12 +996,14 @@ function ReviewDesk() {
                   </div>
                 </div>
 
-                <div className="form-section line-items-section">
+                <div className={`form-section line-items-section${editId ? ' edit-form-section edit-receipt-wide-section' : ''}`}>
                   <div className="section-label section-label-action">
-                    <div><span>02</span><h3>Receipt-wide choices and line items</h3></div>
-                    <button className="text-button" type="button" onClick={addLineItem}>Add item +</button>
+                    {editId ? <h3>Receipt-wide choices</h3> : <div><span>02</span><h3>Receipt-wide choices and line items</h3></div>}
+                    {!editId && <button className="text-button" type="button" onClick={addLineItem}>Add item +</button>}
                   </div>
-                  <p className="project-summary">These two choices apply to this receipt and all its line items.</p>
+                  <p className={`project-summary${editId ? ' edit-scope-note' : ''}`}>
+                    These two choices apply to this receipt and all its line items.
+                  </p>
                   <div className="receipt-wide-choices">
                     <div className={saveIssues.includes('project') ? 'save-field-invalid' : ''} data-save-field="project">
                       <ProjectSelect projects={projectsState.projects} value={draft.projectId}
@@ -1023,6 +1025,10 @@ function ReviewDesk() {
                   {draft.projectId === mixedProjectsValue && <p className="project-summary" role="alert">
                     This receipt currently has mixed project assignments. Choose one project above to apply it to every line item.
                   </p>}
+                  {editId && <div className="edit-line-items-heading">
+                    <h3>Line items</h3>
+                    <button className="text-button" type="button" onClick={addLineItem}>Add item +</button>
+                  </div>}
                   {draft.lineItems.length === 0 ? (
                     <div className={`line-items-empty${saveIssues.includes('lineItems') ? ' save-field-invalid' : ''}`}
                       data-save-field="lineItems" tabIndex={saveIssues.includes('lineItems') ? -1 : undefined}>

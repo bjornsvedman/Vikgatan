@@ -77,24 +77,6 @@ if (-not (Test-Path (Join-Path $frontend 'node_modules'))) {
     }
 }
 
-$previousEnvironment = $env:ASPNETCORE_ENVIRONMENT
-$env:ASPNETCORE_ENVIRONMENT = 'Development'
-try {
-    Write-Host 'Applying database migrations...'
-    & dotnet ef database update --project $apiProject
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Database migrations failed.'
-    }
-}
-finally {
-    if ($null -eq $previousEnvironment) {
-        Remove-Item Env:ASPNETCORE_ENVIRONMENT -ErrorAction SilentlyContinue
-    }
-    else {
-        $env:ASPNETCORE_ENVIRONMENT = $previousEnvironment
-    }
-}
-
 function Test-LocalPort {
     param([int]$Port)
 
@@ -108,6 +90,41 @@ function Test-LocalPort {
     }
     finally {
         $client.Dispose()
+    }
+}
+
+$apiAlreadyRunning = $false
+if (Test-LocalPort 5084) {
+    try {
+        $apiResponse = Invoke-RestMethod -Uri 'http://localhost:5084/' -TimeoutSec 3
+        $apiAlreadyRunning = $apiResponse.name -eq 'Invoice Manager API'
+    }
+    catch {}
+    if (-not $apiAlreadyRunning) {
+        throw 'Port 5084 is already in use by another application.'
+    }
+}
+
+$previousEnvironment = $env:ASPNETCORE_ENVIRONMENT
+$env:ASPNETCORE_ENVIRONMENT = 'Development'
+try {
+    Write-Host 'Applying database migrations...'
+    if ($apiAlreadyRunning) {
+        & dotnet ef database update --project $apiProject --no-build
+    }
+    else {
+        & dotnet ef database update --project $apiProject
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Database migrations failed.'
+    }
+}
+finally {
+    if ($null -eq $previousEnvironment) {
+        Remove-Item Env:ASPNETCORE_ENVIRONMENT -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:ASPNETCORE_ENVIRONMENT = $previousEnvironment
     }
 }
 
@@ -149,11 +166,8 @@ function Wait-ForFrontend {
     throw 'The frontend did not become ready at http://127.0.0.1:5173/. Check its console window.'
 }
 
-if (-not (Test-LocalPort 5084)) {
+if (-not $apiAlreadyRunning) {
     Start-AppWindow -ChildMode Api
-}
-elseif ((Invoke-RestMethod -Uri 'http://localhost:5084/' -TimeoutSec 3).name -ne 'Invoice Manager API') {
-    throw 'Port 5084 is already in use by another application.'
 }
 Wait-ForApi
 
