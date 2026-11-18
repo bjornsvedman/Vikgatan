@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { Archive, ClipboardCheck, FolderOpen, MessageSquare, Save, Search, Settings, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ChangeEvent } from 'react'
+import { Archive, ClipboardCheck, ExternalLink, FolderOpen, MessageSquare, Save, Search, Settings, X } from 'lucide-react'
 import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom'
 import ReceiptArchive from './ReceiptArchive'
 import Admin from './Admin'
@@ -175,13 +175,18 @@ async function responseError(response: Response): Promise<Error> {
 }
 
 function ReviewDesk() {
-  const { pathname } = useLocation()
+  const { pathname, key: locationKey } = useLocation()
   const navigate = useNavigate()
   const editId = useMatch('/archive/:receiptId/edit')?.params.receiptId
   const view = editId ? 'edit' : pathname === '/' ? 'home' : pathname === '/archive' ? 'archive' : pathname === '/review' ? 'review' : pathname === '/admin' ? 'admin' : 'not-found'
   const pageTitle = view === 'home' ? 'Ask your receipts' : view === 'archive' ? 'Receipt archive' : view === 'review' ? 'Review receipts' : view === 'edit' ? 'Edit reviewed receipt' : view === 'admin' ? 'Admin' : 'Page not found'
   const [archiveVersion, setArchiveVersion] = useState(0)
   const [lastSavedReceipt, setLastSavedReceipt] = useState<Receipt | null>(null)
+  const [previewLayout, setPreviewLayout] = useState({
+    locationKey,
+    collapsed: false,
+    ratio: 0.3125,
+  })
   const [receipts, setReceipts] = useState<Receipt[]>([])
   const [properties, setProperties] = useState<PropertyWorkspace[]>([])
   const [selectedPropertyId, setSelectedPropertyId] = useState('')
@@ -205,7 +210,41 @@ function ReviewDesk() {
   const projectsState = useProjects(selectedPropertyId, requestToken)
   const questionController = useRef<AbortController | null>(null)
   const editFormRef = useRef<HTMLFormElement | null>(null)
+  const editDocumentLayoutRef = useRef<HTMLDivElement | null>(null)
+  const resizingPreviewRef = useRef(false)
   useEffect(() => () => questionController.current?.abort(), [selectedPropertyId])
+
+  const activePreviewLayout = previewLayout.locationKey === locationKey
+    ? previewLayout
+    : { locationKey, collapsed: false, ratio: 0.3125 }
+  const previewCollapsed = activePreviewLayout.collapsed
+  const receiptPaneRatio = activePreviewLayout.ratio
+
+  function updatePreviewLayout(update: Partial<Pick<typeof activePreviewLayout, 'collapsed' | 'ratio'>>) {
+    setPreviewLayout(current => ({
+      ...(current.locationKey === locationKey ? current : activePreviewLayout),
+      ...update,
+    }))
+  }
+
+  function changeReceiptPaneRatio(ratio: number) {
+    updatePreviewLayout({ ratio: Math.max(0.02, Math.min(0.98, ratio)) })
+  }
+
+  function updateReceiptPaneFromPointer(clientX: number) {
+    const layout = editDocumentLayoutRef.current
+    if (!layout) return
+    const flexibleWidth = layout.clientWidth - 300 - 720 - 24
+    if (flexibleWidth <= 0) return
+    const desiredWidth = clientX - layout.getBoundingClientRect().left - 12
+    const ratio = (desiredWidth - 300) / flexibleWidth
+    changeReceiptPaneRatio(ratio)
+  }
+
+  function adjustReceiptPaneRatio(delta: number) {
+    changeReceiptPaneRatio(receiptPaneRatio + delta)
+  }
+
   const folderImportController = useRef<AbortController | null>(null)
   const draft = editId ? editDraft : reviewDraft
   const setDraft = editId ? setEditDraft : setReviewDraft
@@ -746,7 +785,7 @@ function ReviewDesk() {
         <NavLink to="/admin"><Settings size={16} aria-hidden="true" />Admin</NavLink>
       </nav>
 
-      <main className="page-content">
+      <main className={editId ? 'page-content is-editing' : 'page-content'}>
         {view !== 'archive' && <section className="page-heading">
           <div>
             <p className="eyebrow">{view === 'home' ? 'RENOVATION ARCHIVE' : 'DOCUMENTS'}</p>
@@ -925,76 +964,163 @@ function ReviewDesk() {
                       <p>Added {formatDateTime(selectedReceipt.createdAtUtc)}</p>
                     </div>
                   </div>
+                  {editId && previewCollapsed && <button
+                    className="text-button edit-preview-restore"
+                    type="button"
+                    aria-expanded={false}
+                    aria-controls={`receipt-pane-${selectedReceipt.id}`}
+                    onClick={() => updatePreviewLayout({ collapsed: false })}
+                  >Show receipt</button>}
                   <span className={`status-mark status-${selectedReceipt.status.toLowerCase()}`}>
                     {selectedReceipt.status === 'NeedsReview' ? 'Review' : selectedReceipt.status}
                   </span>
                 </div>
 
-                <div className={`document-preview${selectedReceipt.fileName.toLowerCase().endsWith('.pdf') ? '' : ' document-preview-image'}`}>
-                  {selectedReceipt.fileName.toLowerCase().endsWith('.pdf') ? (
-                    <iframe
-                      src={`/api/documents/${selectedReceipt.id}/file`}
-                      title={`Preview of ${selectedReceipt.fileName}`}
-                    />
-                  ) : (
-                    <img
-                      src={`/api/documents/${selectedReceipt.id}/file`}
-                      alt={`Preview of ${selectedReceipt.fileName}`}
-                    />
-                  )}
-                </div>
-
-                {selectedReceipt.processingError && (
-                  <div className="message message-error document-processing-error" role="status">
-                    {selectedReceipt.processingError}
-                  </div>
-                )}
-
-                <div className={`form-section${editId ? ' edit-form-section' : ''}`}>
-                  <div className="section-label">
-                    {!editId && <span>01</span>}
-                    <h3>Document details</h3>
-                  </div>
-                  <div className="field-grid">
-                    <label className={`field field-wide${saveIssues.includes('vendor') ? ' save-field-invalid' : ''}`} data-save-field="vendor">
-                      <span>Vendor</span>
-                      <input aria-invalid={saveIssues.includes('vendor')} value={draft.vendor} onChange={(event) => updateDraft('vendor', event.target.value)} maxLength={256} />
-                      {saveIssues.includes('vendor') && <span className="field-error-hint">Review the vendor value.</span>}
-                    </label>
-                    <label className={`field${saveIssues.includes('documentDate') ? ' save-field-invalid' : ''}`} data-save-field="documentDate">
-                      <span>Document date</span>
-                      <input aria-invalid={saveIssues.includes('documentDate')} type="date" value={draft.documentDate} onChange={(event) => updateDraft('documentDate', event.target.value)} />
-                      {saveIssues.includes('documentDate') && <span className="field-error-hint">Review the document date.</span>}
-                    </label>
-                    <label className={`field${saveIssues.includes('totalAmount') ? ' save-field-invalid' : ''}`} data-save-field="totalAmount">
-                      <span>Total amount</span>
-                      <div className="money-input">
-                        <input aria-invalid={saveIssues.includes('totalAmount')} type="number" min="0" step="0.0001" value={draft.totalAmount} onChange={(event) => updateDraft('totalAmount', event.target.value)} />
-                        <input className="currency-input" aria-label="Currency" value="SEK" readOnly />
-                      </div>
-                      {saveIssues.includes('totalAmount') && <span className="field-error-hint">Review the receipt total.</span>}
-                    </label>
-                    <div className={`field-wide${saveIssues.includes('currency') ? ' save-field-invalid' : ''}`}
-                      data-save-field="currency" tabIndex={saveIssues.includes('currency') ? -1 : undefined}>
-                      <p>This first version supports SEK only. No currency conversions.</p>
-                      {saveIssues.includes('currency') && <span className="field-error-hint">Review the receipt currency.</span>}
-                    </div>
-                    {(draft.currency !== 'SEK' || draft.expenses.some(expense => expense.currency !== 'SEK')) && <div className="message message-error field-wide" role="status">
-                      <p>Stored receipt currency: {draft.currency || 'not set'}. Some amounts are not SEK and cannot be approved or included in confirmed report totals. Their original currency is preserved.</p>
-                      <button type="button" className="text-button" onClick={() => {
-                        if (!window.confirm('Only correct this if the original receipt and all expense amounts are already SEK and the currency was misread. This does not convert or change any amounts. Continue?')) return
-                        setDraft(current => current ? { ...current, currency: 'SEK',
-                          expenses: current.expenses.map(expense => ({ ...expense, currency: 'SEK', confirm: false })),
-                        } : current)
-                      }}>Correct a misread currency to SEK</button>
+                <div
+                  ref={editId ? editDocumentLayoutRef : undefined}
+                  className={editId ? `edit-document-layout${previewCollapsed ? ' is-preview-collapsed' : ''}` : undefined}
+                  style={editId ? {
+                    '--receipt-pane-flex': `${receiptPaneRatio}fr`,
+                    '--editor-pane-flex': `${1 - receiptPaneRatio}fr`,
+                  } as CSSProperties : undefined}
+                >
+                  <div
+                    id={`receipt-pane-${selectedReceipt.id}`}
+                    className={editId ? 'edit-receipt-pane' : undefined}
+                    hidden={!!editId && previewCollapsed}
+                  >
+                    {editId && <div className="edit-receipt-pane-heading">
+                      <h3>Original receipt</h3>
+                      <button
+                        className="text-button"
+                        type="button"
+                        aria-expanded={true}
+                        aria-controls={`receipt-pane-${selectedReceipt.id}`}
+                        onClick={() => updatePreviewLayout({ collapsed: true })}
+                      >
+                        Hide receipt
+                      </button>
                     </div>}
-                    <label className={`field field-wide${saveIssues.includes('description') ? ' save-field-invalid' : ''}`} data-save-field="description">
-                      <span>Description</span>
-                      <textarea aria-invalid={saveIssues.includes('description')} rows={3} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} maxLength={4000} />
-                      {saveIssues.includes('description') && <span className="field-error-hint">Review the description.</span>}
-                    </label>
+                    <div
+                      id={`receipt-preview-${selectedReceipt.id}`}
+                      className={`document-preview${selectedReceipt.fileName.toLowerCase().endsWith('.pdf') ? '' : ' document-preview-image'}${editId ? ' edit-receipt-preview' : ''}`}
+                    >
+                      {selectedReceipt.fileName.toLowerCase().endsWith('.pdf') ? (
+                        <iframe
+                          src={`/api/documents/${selectedReceipt.id}/file`}
+                          title={`Preview of ${selectedReceipt.fileName}`}
+                        />
+                      ) : (
+                        <img
+                          src={`/api/documents/${selectedReceipt.id}/file`}
+                          alt={`Preview of ${selectedReceipt.fileName}`}
+                        />
+                      )}
+                    </div>
+
+                    {selectedReceipt.processingError && (
+                      <div className="message message-error document-processing-error" role="status">
+                        {selectedReceipt.processingError}
+                      </div>
+                    )}
+
+                    {editId && <a className="edit-open-original" href={`/api/documents/${selectedReceipt.id}/file`} target="_blank" rel="noreferrer">
+                      <ExternalLink size={15} aria-hidden="true" />
+                      Open original separately
+                    </a>}
                   </div>
-                </div>
+
+                  {editId && !previewCollapsed && <div
+                    className="edit-pane-divider"
+                    role="separator"
+                    aria-label="Resize receipt and line items"
+                    aria-orientation="vertical"
+                    aria-controls={`receipt-pane-${selectedReceipt.id} edit-form-content-${selectedReceipt.id}`}
+                    aria-valuemin={2}
+                    aria-valuemax={98}
+                    aria-valuenow={Math.round(receiptPaneRatio * 100)}
+                    aria-valuetext={`Receipt uses ${Math.round(receiptPaneRatio * 100)}% of the adjustable split space`}
+                    tabIndex={0}
+                    onPointerDown={event => {
+                      event.currentTarget.focus()
+                      resizingPreviewRef.current = true
+                      event.currentTarget.setPointerCapture(event.pointerId)
+                      updateReceiptPaneFromPointer(event.clientX)
+                    }}
+                    onPointerMove={event => {
+                      if (resizingPreviewRef.current) updateReceiptPaneFromPointer(event.clientX)
+                    }}
+                    onPointerUp={event => {
+                      resizingPreviewRef.current = false
+                      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                        event.currentTarget.releasePointerCapture(event.pointerId)
+                      }
+                    }}
+                    onPointerCancel={() => { resizingPreviewRef.current = false }}
+                    onLostPointerCapture={() => { resizingPreviewRef.current = false }}
+                    onKeyDown={event => {
+                      if (event.key === 'ArrowLeft') {
+                        event.preventDefault()
+                        adjustReceiptPaneRatio(-0.02)
+                      } else if (event.key === 'ArrowRight') {
+                        event.preventDefault()
+                        adjustReceiptPaneRatio(0.02)
+                      } else if (event.key === 'Home') {
+                        event.preventDefault()
+                        changeReceiptPaneRatio(0.02)
+                      } else if (event.key === 'End') {
+                        event.preventDefault()
+                        changeReceiptPaneRatio(0.98)
+                      }
+                    }}
+                  />}
+
+                  <div id={editId ? `edit-form-content-${selectedReceipt.id}` : undefined} className={editId ? 'edit-form-content' : undefined}>
+                    <div className={`form-section${editId ? ' edit-form-section' : ''}`}>
+                      <div className="section-label">
+                        {!editId && <span>01</span>}
+                        <h3>Document details</h3>
+                      </div>
+                      <div className="field-grid">
+                        <label className={`field field-wide${saveIssues.includes('vendor') ? ' save-field-invalid' : ''}`} data-save-field="vendor">
+                          <span>Vendor</span>
+                          <input aria-invalid={saveIssues.includes('vendor')} value={draft.vendor} onChange={(event) => updateDraft('vendor', event.target.value)} maxLength={256} />
+                          {saveIssues.includes('vendor') && <span className="field-error-hint">Review the vendor value.</span>}
+                        </label>
+                        <label className={`field${saveIssues.includes('documentDate') ? ' save-field-invalid' : ''}`} data-save-field="documentDate">
+                          <span>Document date</span>
+                          <input aria-invalid={saveIssues.includes('documentDate')} type="date" value={draft.documentDate} onChange={(event) => updateDraft('documentDate', event.target.value)} />
+                          {saveIssues.includes('documentDate') && <span className="field-error-hint">Review the document date.</span>}
+                        </label>
+                        <label className={`field${saveIssues.includes('totalAmount') ? ' save-field-invalid' : ''}`} data-save-field="totalAmount">
+                          <span>Total amount</span>
+                          <div className="money-input">
+                            <input aria-invalid={saveIssues.includes('totalAmount')} type="number" min="0" step="0.0001" value={draft.totalAmount} onChange={(event) => updateDraft('totalAmount', event.target.value)} />
+                            <input className="currency-input" aria-label="Currency" value="SEK" readOnly />
+                          </div>
+                          {saveIssues.includes('totalAmount') && <span className="field-error-hint">Review the receipt total.</span>}
+                        </label>
+                        <div className={`field-wide${saveIssues.includes('currency') ? ' save-field-invalid' : ''}`}
+                          data-save-field="currency" tabIndex={saveIssues.includes('currency') ? -1 : undefined}>
+                          <p>This first version supports SEK only. No currency conversions.</p>
+                          {saveIssues.includes('currency') && <span className="field-error-hint">Review the receipt currency.</span>}
+                        </div>
+                        {(draft.currency !== 'SEK' || draft.expenses.some(expense => expense.currency !== 'SEK')) && <div className="message message-error field-wide" role="status">
+                          <p>Stored receipt currency: {draft.currency || 'not set'}. Some amounts are not SEK and cannot be approved or included in confirmed report totals. Their original currency is preserved.</p>
+                          <button type="button" className="text-button" onClick={() => {
+                            if (!window.confirm('Only correct this if the original receipt and all expense amounts are already SEK and the currency was misread. This does not convert or change any amounts. Continue?')) return
+                            setDraft(current => current ? { ...current, currency: 'SEK',
+                              expenses: current.expenses.map(expense => ({ ...expense, currency: 'SEK', confirm: false })),
+                            } : current)
+                          }}>Correct a misread currency to SEK</button>
+                        </div>}
+                        <label className={`field field-wide${saveIssues.includes('description') ? ' save-field-invalid' : ''}`} data-save-field="description">
+                          <span>Description</span>
+                          <textarea aria-invalid={saveIssues.includes('description')} rows={3} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} maxLength={4000} />
+                          {saveIssues.includes('description') && <span className="field-error-hint">Review the description.</span>}
+                        </label>
+                      </div>
+                    </div>
 
                 <div className={`form-section line-items-section${editId ? ' edit-form-section edit-receipt-wide-section' : ''}`}>
                   <div className="section-label section-label-action">
@@ -1099,6 +1225,8 @@ function ReviewDesk() {
                       <button className="button-secondary" type="submit" disabled={saving || !requestToken}>{saving ? 'Saving…' : 'Save draft'}</button>
                       <button className="button-primary" type="button" disabled={saving || !requestToken} onClick={() => void saveReview(true)}>{saving ? 'Saving…' : 'Mark reviewed'}</button>
                     </>}
+                  </div>
+                </div>
                   </div>
                 </div>
               </form>
